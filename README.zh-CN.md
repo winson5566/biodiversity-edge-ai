@@ -4,7 +4,7 @@
 
 一个用于离线物种识别的嵌入式机器学习项目，涵盖图像分类、时空地理先验、量化、剪枝及树莓派推理，所有功能位于同一个 Python 包中。
 
-[快速开始](#快速开始) · [数据集](#数据集) · [训练](#训练) · [模型优化](#模型优化) · [评测](#评测) · [推理](#推理) · [树莓派部署](#树莓派部署) · [系统架构](#系统架构) · [更多文档](#更多文档)
+[快速开始](#快速开始) · [数据集](#数据集) · [训练](#训练) · [模型优化](#模型优化) · [评测](#评测) · [推理](#推理) · [树莓派部署](#树莓派部署) · [系统架构](#系统架构) · [验证](#验证) · [教学](#教学)
 
 ## 快速开始
 
@@ -24,7 +24,7 @@ make smoke
 
 微型测试生成 **2 类、24 张合成图片**，按 16/4/4 划分训练、验证与测试集，训练两个模型，导出 FP32/DRQ/INT8，进行 50% 剪枝和微调，再评测融合预测。无需下载 iNaturalist 数据或 ImageNet 权重。
 
-输出位于 `artifacts/smoke/models/` 和 `artifacts/smoke/results/tradeoffs.md`。该流程已经实际跑通，详见[测试记录](docs/SMOKE_TEST.md)。合成数据准确率和工作站耗时用于验证软件链路，不能代表真实物种识别效果或树莓派性能。
+输出位于 `artifacts/smoke/models/` 和 `artifacts/smoke/results/tradeoffs.md`。合成数据准确率和工作站耗时用于验证软件链路，不能代表真实物种识别效果或树莓派性能。实际验证阶段和结果见[验证](#验证)。
 
 ## 数据集
 
@@ -124,7 +124,7 @@ make prepare
 
 官方 public Test 信息不含真实类别标注，因此不能传入监督数据准备命令，也不能用于计算本地 Top-1 准确率。官方 Validation 是独立的有标注数据源，评测时需要与训练模型的类别映射对齐。详见[官方标注说明](https://github.com/visipedia/inat_comp/tree/master/2021#annotation-format-notes)。
 
-字段定义、图片复制方式和单独的数据准备命令见[数据准备与格式文档](docs/DATA_FORMATS.md)。
+数据准备命令支持 COCO 风格 JSON，其中包括 `images`、`annotations` 和 `categories`。它使用 `image.file_name`、`image.latitude`、`image.longitude`、`image.date` 和 `annotation.category_id`。缺少或无效的位置、日期仍可用于视觉模型训练，但不会用于 Geo Prior 训练。
 
 ## 训练
 
@@ -207,7 +207,7 @@ PYTHONPATH=src python scripts/prune_vision.py \
   --input-size 128 --input-scale minus1_1 --finetune-epochs 3
 ```
 
-随后用 `scripts/export_tflite.py` 导出该 Keras 模型，并使用独立的文件名与模型 ID；命令格式见[导出示例](docs/DATA_FORMATS.md#5-export-deployment-models)。
+随后用 `scripts/export_tflite.py` 导出该 Keras 模型，并使用独立的文件名与模型 ID。
 
 ## 评测
 
@@ -236,7 +236,7 @@ PYTHONPATH=src python scripts/benchmark_rpi.py \
   --output artifacts/results/pi_benchmark.json
 ```
 
-权重为零不一定带来文件缩小或推理加速，应根据设备实测选择部署方案。详见[性能评测指南](docs/PERFORMANCE_EVALUATION.md)。
+权重为零不一定带来文件缩小或推理加速，应根据设备实测选择部署方案。比较规则见[评测](#评测)。
 
 ## 推理
 
@@ -291,17 +291,67 @@ Image ─────────────> Vision TFLite ────┐
 Latitude/longitude/date ──> Geo Prior ─┘
 ```
 
-工作站负责训练和导出，树莓派加载 TFLite 模型。共享清单声明输入形状、缩放、数据类型、优化模式和类别映射哈希，使两个模型的预测类别保持对齐。详见[架构与接口](docs/ARCHITECTURE.md)。
+工作站负责训练和导出，树莓派加载 TFLite 模型。共享清单声明输入形状、缩放、数据类型、优化模式和类别映射哈希，使两个模型的预测类别保持对齐。
 
-## 更多文档
+### 组件与兼容规则
 
-以下深入文档目前为英文：
+| 能力 | 实现位置 |
+|---|---|
+| 数据准备和类别映射 | `scripts/prepare_data.py`、`pipeline.py` |
+| 视觉模型和训练 | `models/vision.py`、`training/vision.py` |
+| Geo Prior 与元数据编码 | `metadata.py`、`models/geo_prior.py`、`training/geo_prior.py` |
+| TFLite 导出和模型清单 | `export/tflite.py`、`manifest.py` |
+| 量化和剪枝 | `export/tflite.py`、`training/pruning.py` |
+| 融合 | `fusion.py`、`inference.py` |
+| 基准测试 | `evaluation/benchmark.py`、`scripts/summarize_benchmarks.py` |
+| 树莓派相机和屏幕 | `device/rpi_camera.py`、`device/display.py` |
 
-- [数据准备与格式](docs/DATA_FORMATS.md)
-- [架构与接口](docs/ARCHITECTURE.md)
-- [性能评测](docs/PERFORMANCE_EVALUATION.md)
-- [小数据全流程测试](docs/SMOKE_TEST.md)
-- [课堂讲解与实践安排](docs/LECTURE_DEMO.md)
+融合前，程序检查两个模型的输出维度是否等于类别映射长度，以及两个清单中的类别映射 SHA-256 是否一致。清单还记录输入形状、数据类型、缩放方式、角色和优化模式。Geo 特征顺序固定为：经度正弦/余弦、纬度正弦/余弦、日期正弦/余弦。发现不兼容产物时程序会明确报错。
+
+## 验证
+
+以下微型流程于 2026 年 9 月 8 日在 Apple M4 工作站完成，环境为 Python 3.12.8、NumPy 1.26.4、TensorFlow 2.16.2 和 Keras 3.8.0：
+
+1. 创建 24 张合成源图片及 COCO 风格标注文件。
+2. 准备确定性的 16/4/4 训练、验证、测试划分，并保持两类映射一致。
+3. 训练 MobileNetV2 和六特征 Geo Prior。
+4. 导出视觉模型的 FP32、DRQ、全 INT8 TFLite，以及 Geo Prior TFLite。
+5. 进行 50% 幅值剪枝，以固定掩码微调，导出剪枝后的 DRQ 模型。
+6. 通过集成运行时加载全部模型，完成融合推理，并生成 JSON、CSV、Markdown 结果表。
+
+| 模型 | 优化 | 输入 | 大小 | 测试 Top-1 | 端到端中位数 |
+|---|---|---|---:|---:|---:|
+| `vision_fp32` | FP32 | float32 | 2,761,512 bytes | 50% | 0.263 ms |
+| `vision_drq` | DRQ | float32 | 870,752 bytes | 50% | 0.237 ms |
+| `vision_int8` | 全 INT8 | int8 | 973,752 bytes | 50% | 0.192 ms |
+| `vision_pruned_50_drq` | 剪枝 + DRQ | float32 | 862,096 bytes | 50% | 0.230 ms |
+
+共同使用的 Geo Prior 为 15,392 bytes。该运行只使用四张合成测试图片、一次预热和一次重复。数值仅验证运行链路，不能代表真实数据准确率或树莓派测量结果。
+
+### 评测规则
+
+部署比较时，固定测试划分、类别映射、图片预处理、输入分辨率、Geo Prior、融合权重、树莓派型号、系统镜像、散热、电源、CPU governor、TFLite 线程数、预热次数和测量次数。保存模型清单、原始 JSON 输出、环境条件和功耗计量方法。
+
+| 版本 | Top-1 | 模型大小 | 推理中位数 | 端到端 P95 | RSS 增量 | 每图能耗 |
+|---|---:|---:|---:|---:|---:|---:|
+| FP32 | TBD | TBD | TBD | TBD | TBD | TBD |
+| DRQ | TBD | TBD | TBD | TBD | TBD | TBD |
+| 全 INT8 | TBD | TBD | TBD | TBD | TBD | TBD |
+| 剪枝 50% + DRQ | TBD | TBD | TBD | TBD | TBD | TBD |
+
+部署选择应先确定允许的准确率损失和 P95 延迟目标，再选择满足它们的最小模型。可增加 30% 或 70% 剪枝、剪枝加全 INT8 等实验。
+
+## 教学
+
+本项目适合 60–90 分钟讲解加实践：
+
+1. 说明离线物种识别和树莓派约束。
+2. 跟踪图片预处理、视觉模型推理、softmax 和 Top-K 输出。
+3. 编码经纬度和日期，对比纯视觉与对数线性融合。
+4. 导出 FP32、DRQ、全 INT8 及 30%/50%/70% 剪枝版本。
+5. 在相同树莓派工作负载下评测每个模型，用准确率、大小、延迟、内存和能耗解释选择。
+
+现场训练可使用 5–10 类、128×128 MobileNetV2，并携带一个已导出的多类别模型展示规模。每组应提交固定类别映射和划分说明、模型清单、树莓派原始基准 JSON、完整折中表，以及基于实测结果的推荐。
 
 运行核心测试：
 

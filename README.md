@@ -4,7 +4,7 @@
 
 Offline species recognition with image classification, a spatio-temporal Geo Prior, quantization, pruning, and Raspberry Pi inference in one Python package.
 
-[Quick start](#quick-start) · [Dataset](#dataset) · [Training](#training) · [Optimization](#optimization) · [Evaluation](#evaluation) · [Inference](#inference) · [Raspberry Pi](#raspberry-pi) · [Architecture](#architecture) · [Documentation](#documentation)
+[Quick start](#quick-start) · [Dataset](#dataset) · [Training](#training) · [Optimization](#optimization) · [Evaluation](#evaluation) · [Inference](#inference) · [Raspberry Pi](#raspberry-pi) · [Architecture](#architecture) · [Verification](#verification) · [Teaching](#teaching)
 
 ## Quick start
 
@@ -24,7 +24,7 @@ Run subsequent workstation commands from the repository root with this environme
 
 The smoke run generates **24 synthetic images in two classes**, prepares a 16/4/4 split, trains both models, exports FP32/DRQ/INT8, applies 50% pruning with fine-tuning, and benchmarks fused predictions. It does not need an iNaturalist download or ImageNet weights.
 
-Outputs: `artifacts/smoke/models/` and `artifacts/smoke/results/tradeoffs.md`. This path has been executed successfully; see the [recorded smoke test](docs/SMOKE_TEST.md). Synthetic accuracy and workstation timings verify the software path and do not establish real species accuracy or Pi performance.
+Outputs: `artifacts/smoke/models/` and `artifacts/smoke/results/tradeoffs.md`. Synthetic accuracy and workstation timings verify the software path and do not establish real species accuracy or Pi performance. The exact verified stages and results are listed in [Verification](#verification).
 
 ## Dataset
 
@@ -124,7 +124,7 @@ The default pipeline creates deterministic local train/validation/test splits fr
 
 Official public Test info has no ground-truth annotations, so it cannot be passed to the supervised preparation command or used to calculate local Top-1 accuracy. Official Validation uses a separate labeled source; evaluation must align its categories with the trained class map. See the [dataset annotation notes](https://github.com/visipedia/inat_comp/tree/master/2021#annotation-format-notes).
 
-For schema details, image copying options, and individual preparation commands, see [Data preparation and formats](docs/DATA_FORMATS.md).
+The preparation command accepts COCO-style JSON with `images`, `annotations`, and `categories`. It uses `image.file_name`, `image.latitude`, `image.longitude`, `image.date`, and `annotation.category_id`. Invalid or missing location/date data remains available to vision training but is excluded from Geo Prior training.
 
 ## Training
 
@@ -207,7 +207,7 @@ PYTHONPATH=src python scripts/prune_vision.py \
   --input-size 128 --input-scale minus1_1 --finetune-epochs 3
 ```
 
-Export that Keras model with `scripts/export_tflite.py` using a distinct artifact name and model ID; see the [export examples](docs/DATA_FORMATS.md#5-export-deployment-models).
+Export that Keras model with `scripts/export_tflite.py` using a distinct artifact name and model ID.
 
 ## Evaluation
 
@@ -236,7 +236,7 @@ PYTHONPATH=src python scripts/benchmark_rpi.py \
   --output artifacts/results/pi_benchmark.json
 ```
 
-Sparse weights alone do not guarantee smaller files or lower latency. Base the deployment choice on target-device measurements; see the [performance evaluation guide](docs/PERFORMANCE_EVALUATION.md).
+Sparse weights alone do not guarantee smaller files or lower latency. Base the deployment choice on target-device measurements. The comparison protocol is in [Evaluation](#evaluation).
 
 ## Inference
 
@@ -291,15 +291,67 @@ Image ─────────────> Vision TFLite ────┐
 Latitude/longitude/date ──> Geo Prior ─┘
 ```
 
-The workstation trains and exports models; the Pi loads TFLite artifacts. Shared manifests declare input shape, scaling, dtype, optimization, and the class-map hash so that the two prediction vectors remain aligned. See [Architecture and interfaces](docs/ARCHITECTURE.md).
+The workstation trains and exports models; the Pi loads TFLite artifacts. Shared manifests declare input shape, scaling, dtype, optimization, and the class-map hash so that the two prediction vectors remain aligned.
 
-## Documentation
+### Components and compatibility
 
-- [Data preparation and formats](docs/DATA_FORMATS.md)
-- [Architecture and interfaces](docs/ARCHITECTURE.md)
-- [Performance evaluation](docs/PERFORMANCE_EVALUATION.md)
-- [Small-data full-pipeline test](docs/SMOKE_TEST.md)
-- [Lecture and practical sequence](docs/LECTURE_DEMO.md)
+| Capability | Implementation |
+|---|---|
+| Dataset preparation and class map | `scripts/prepare_data.py`, `pipeline.py` |
+| Vision model and training | `models/vision.py`, `training/vision.py` |
+| Geo Prior and metadata encoding | `metadata.py`, `models/geo_prior.py`, `training/geo_prior.py` |
+| TFLite export and manifests | `export/tflite.py`, `manifest.py` |
+| Quantization and pruning | `export/tflite.py`, `training/pruning.py` |
+| Fusion | `fusion.py`, `inference.py` |
+| Benchmarking | `evaluation/benchmark.py`, `scripts/summarize_benchmarks.py` |
+| Pi camera and display | `device/rpi_camera.py`, `device/display.py` |
+
+Before fusion, the application checks that both output dimensions match the class-map length and that both manifests have the same class-map SHA-256 value. It also records input shape, dtype, scaling, role, and optimization mode. Geo features have a fixed order: sine/cosine longitude, sine/cosine latitude, and sine/cosine date. An incompatible artifact fails explicitly.
+
+## Verification
+
+The following small-data run was completed on 8 September 2026 using Python 3.12.8, NumPy 1.26.4, TensorFlow 2.16.2, Keras 3.8.0, and an Apple M4 workstation:
+
+1. Created 24 synthetic source images and a COCO-style annotation file.
+2. Prepared deterministic 16/4/4 train/validation/test splits with a shared two-class map.
+3. Trained MobileNetV2 and the six-feature Geo Prior.
+4. Exported vision FP32, DRQ, and full-INT8 TFLite models plus the Geo Prior TFLite model.
+5. Applied 50% magnitude pruning, fine-tuned with fixed masks, and exported the pruned DRQ model.
+6. Loaded every artifact through the integrated runtime, ran fused predictions, and generated JSON, CSV, and Markdown trade-off results.
+
+| Model | Optimization | Input | Size | Test Top-1 | End-to-end median |
+|---|---|---|---:|---:|---:|
+| `vision_fp32` | FP32 | float32 | 2,761,512 bytes | 50% | 0.263 ms |
+| `vision_drq` | DRQ | float32 | 870,752 bytes | 50% | 0.237 ms |
+| `vision_int8` | full INT8 | int8 | 973,752 bytes | 50% | 0.192 ms |
+| `vision_pruned_50_drq` | pruning + DRQ | float32 | 862,096 bytes | 50% | 0.230 ms |
+
+The common Geo Prior model was 15,392 bytes. The run used four held-out synthetic images, one warm-up, and one repetition. These figures only verify the runtime path; they are not real-data accuracy results or Raspberry Pi measurements.
+
+### Measurement protocol
+
+For a deployment comparison, keep the test split, class map, image preprocessing, input resolution, Geo Prior artifact, fusion weight, Pi model, OS image, cooling, power supply, CPU governor, TFLite thread count, warm-up count, and measured repetitions fixed. Record the model manifests, raw JSON outputs, ambient conditions, and power-meter method.
+
+| Variant | Top-1 | Model bytes | Invoke median | End-to-end P95 | RSS delta | Energy/image |
+|---|---:|---:|---:|---:|---:|---:|
+| FP32 | TBD | TBD | TBD | TBD | TBD | TBD |
+| DRQ | TBD | TBD | TBD | TBD | TBD | TBD |
+| Full INT8 | TBD | TBD | TBD | TBD | TBD | TBD |
+| Pruned 50% + DRQ | TBD | TBD | TBD | TBD | TBD | TBD |
+
+Choose the smallest model that stays within the agreed accuracy loss and meets the P95 latency target. Optional experiments can add 30% or 70% pruning and pruning plus full INT8.
+
+## Teaching
+
+This project supports a 60–90 minute session plus a practical lab:
+
+1. Explain offline species recognition and Pi constraints.
+2. Trace image preprocessing, vision inference, softmax, and Top-K output.
+3. Encode latitude, longitude, and day of year, then compare vision-only and log-linear fusion.
+4. Export FP32, DRQ, full INT8, and 30%/50%/70% pruned variants.
+5. Benchmark each artifact on the same Pi workload and justify a model choice from accuracy, size, latency, memory, and energy.
+
+For a live session, use 5–10 classes, 128×128 MobileNetV2, and a pre-exported large-class model for scale. Each group should submit the fixed class map and split description, model manifests, raw Pi benchmark JSON, a completed trade-off table, and a recommendation backed by measured results.
 
 Run core tests with:
 
