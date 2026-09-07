@@ -25,6 +25,10 @@ FIELDS = [
     "samples",
 ]
 
+OPTIONAL_FIELDS = ["fusion_mode", "alpha", "top5_accuracy", "load_ms", "invoke_mean_ms",
+                   "end_to_end_mean_ms", "mean_images_per_second", "platform", "machine",
+                   "net_power_w", "energy_per_inference_mj", "invoke_fps_per_w"]
+
 
 def load_results(paths: list[str]) -> list[dict[str, Any]]:
     results: list[dict[str, Any]] = []
@@ -46,7 +50,7 @@ def write_csv(path: str | Path, results: list[dict[str, Any]]) -> None:
     destination = Path(path)
     destination.parent.mkdir(parents=True, exist_ok=True)
     with destination.open("w", encoding="utf-8", newline="") as stream:
-        writer = csv.DictWriter(stream, fieldnames=FIELDS, extrasaction="ignore")
+        writer = csv.DictWriter(stream, fieldnames=FIELDS + OPTIONAL_FIELDS, extrasaction="ignore")
         writer.writeheader()
         writer.writerows(results)
 
@@ -63,7 +67,9 @@ def write_markdown(path: str | Path, results: list[dict[str, Any]]) -> None:
     columns = [
         ("Model", "vision_model_id"),
         ("Optimization", "vision_optimization"),
+        ("Fusion", "fusion_mode"),
         ("Top-1", "top1_accuracy"),
+        ("Top-5", "top5_accuracy"),
         ("Vision bytes", "vision_model_bytes"),
         ("Invoke median ms", "invoke_median_ms"),
         ("End-to-end P95 ms", "end_to_end_p95_ms"),
@@ -76,7 +82,7 @@ def write_markdown(path: str | Path, results: list[dict[str, Any]]) -> None:
     ]
     for result in results:
         lines.append(
-            "| " + " | ".join(_format(result[field]) for _, field in columns) + " |"
+            "| " + " | ".join(_format(result.get(field)) for _, field in columns) + " |"
         )
     destination = Path(path)
     destination.parent.mkdir(parents=True, exist_ok=True)

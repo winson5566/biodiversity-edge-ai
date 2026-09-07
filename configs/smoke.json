@@ -1,0 +1,24 @@
+{
+  "name": "smoke",
+  "synthetic": true,
+  "num_classes": 2,
+  "min_per_class": 3,
+  "max_per_class": 12,
+  "backbone": "mobilenet-v2",
+  "input_size": 32,
+  "width_multiplier": 0.5,
+  "weights": "none",
+  "batch_size": 4,
+  "head_epochs": 1,
+  "finetune_epochs": 1,
+  "geo_epochs": 1,
+  "geo_embedding_dim": 16,
+  "formats": [
+    "fp32",
+    "drq",
+    "int8"
+  ],
+  "representative_limit": 8,
+  "warmup": 1,
+  "repetitions": 1
+}

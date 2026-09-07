@@ -7,6 +7,12 @@ import json
 from pathlib import Path
 from typing import Any
 
+import numpy as np
+from PIL import Image
+
+from biodiversity_edge_ai.inference import preprocess_image
+from biodiversity_edge_ai.manifest import ModelManifest, class_map_sha256
+from biodiversity_edge_ai.models.catalog import BACKBONES, input_scale_for
 from biodiversity_edge_ai.models.vision import build_vision_model
 
 
@@ -18,20 +24,32 @@ def _tensorflow() -> Any:
     return tf
 
 
-def _scale_images(tf: Any, mode: str):
-    def apply(images: Any, labels: Any) -> tuple[Any, Any]:
-        images = tf.cast(images, tf.float32)
-        if mode == "0_1":
-            images = images / 255.0
-        elif mode == "minus1_1":
-            images = images / 127.5 - 1.0
-        elif mode == "imagenet":
-            images = images / 255.0
-            mean = tf.constant([0.485, 0.456, 0.406])
-            std = tf.constant([0.229, 0.224, 0.225])
-            images = (images - mean) / std
-        return images, labels
-    return apply
+def image_dataset(tf: Any, directory: Path, classes: list[str], manifest: ModelManifest,
+                  batch_size: int, seed: int, shuffle: bool) -> Any:
+    """Use the device's PIL crop, resize and scaling during training as well."""
+    paths, labels = [], []
+    for label, name in enumerate(classes):
+        images = sorted(p for p in (directory / name).glob("*")
+                        if p.suffix.lower() in {".jpg", ".jpeg", ".png", ".webp", ".bmp"})
+        if not images:
+            raise ValueError(f"no images for class {name} in {directory}")
+        paths.extend(str(p) for p in images)
+        labels.extend([label] * len(images))
+
+    def read(path: bytes) -> np.ndarray:
+        with Image.open(path.decode("utf-8")) as image:
+            return preprocess_image(image, manifest)
+
+    def decode(path: Any, label: Any) -> tuple[Any, Any]:
+        values = tf.numpy_function(read, [path], tf.float32)
+        values.set_shape(manifest.input_shape)
+        return values, label
+
+    dataset = tf.data.Dataset.from_tensor_slices((paths, labels))
+    if shuffle:
+        dataset = dataset.shuffle(len(paths), seed=seed)
+    return dataset.map(decode, num_parallel_calls=tf.data.AUTOTUNE).batch(
+        batch_size).prefetch(tf.data.AUTOTUNE)
 
 
 def load_prepared_classes(data_dir: str | Path) -> tuple[list[str] | None, list[str] | None]:
@@ -52,34 +70,29 @@ def load_prepared_classes(data_dir: str | Path) -> tuple[list[str] | None, list[
 
 def train(args: argparse.Namespace) -> Path:
     tf = _tensorflow()
+    tf.keras.utils.set_random_seed(args.seed)
+    expected_scale = input_scale_for(args.backbone)
+    if args.input_scale not in ("auto", expected_scale):
+        raise ValueError(f"{args.backbone} requires --input-scale {expected_scale}")
+    args.input_scale = expected_scale
     prepared_directories, prepared_names = load_prepared_classes(args.data_dir)
     images_dir = Path(args.data_dir) / "images" if prepared_directories else Path(args.data_dir)
-    train_ds = tf.keras.utils.image_dataset_from_directory(
-        images_dir / "train",
-        image_size=(args.input_size, args.input_size),
-        batch_size=args.batch_size,
-        label_mode="int",
-        seed=args.seed,
-        class_names=prepared_directories,
-        crop_to_aspect_ratio=True,
-    )
-    directory_names = list(train_ds.class_names)
-    val_ds = tf.keras.utils.image_dataset_from_directory(
-        images_dir / "val",
-        image_size=(args.input_size, args.input_size),
-        batch_size=args.batch_size,
-        label_mode="int",
-        shuffle=False,
-        class_names=prepared_directories,
-        crop_to_aspect_ratio=True,
-    )
-    if list(val_ds.class_names) != directory_names:
-        raise ValueError("train and validation class order differs")
+    directory_names = prepared_directories or sorted(
+        p.name for p in (images_dir / "train").iterdir() if p.is_dir())
     class_names = prepared_names or directory_names
-    autotune = tf.data.AUTOTUNE
-    scale = _scale_images(tf, args.input_scale)
-    train_ds = train_ds.map(scale, num_parallel_calls=autotune).prefetch(autotune)
-    val_ds = val_ds.map(scale, num_parallel_calls=autotune).prefetch(autotune)
+    class_map = Path(args.class_map)
+    if class_map.exists() and json.loads(class_map.read_text()) != class_names:
+        raise ValueError("existing class map differs from prepared dataset")
+    manifest = ModelManifest(
+        model_id=args.backbone, role="vision", format="keras",
+        num_classes=len(class_names), class_map_sha256=class_map_sha256(class_names),
+        input_shape=[args.input_size, args.input_size, 3], input_dtype="float32",
+        input_scale=args.input_scale,
+    )
+    train_ds = image_dataset(tf, images_dir / "train", directory_names, manifest,
+                             args.batch_size, args.seed, True)
+    val_ds = image_dataset(tf, images_dir / "val", directory_names, manifest,
+                           args.batch_size, args.seed, False)
 
     model = build_vision_model(
         backbone=args.backbone,
@@ -94,7 +107,7 @@ def train(args: argparse.Namespace) -> Path:
         loss=tf.keras.losses.SparseCategoricalCrossentropy(),
         metrics=["accuracy"],
     )
-    model.fit(train_ds, validation_data=val_ds, epochs=args.head_epochs)
+    head = model.fit(train_ds, validation_data=val_ds, epochs=args.head_epochs)
 
     base = model.layers[1]
     base.trainable = True
@@ -103,12 +116,15 @@ def train(args: argparse.Namespace) -> Path:
         loss=tf.keras.losses.SparseCategoricalCrossentropy(),
         metrics=["accuracy"],
     )
-    model.fit(train_ds, validation_data=val_ds, epochs=args.finetune_epochs)
+    fine = model.fit(train_ds, validation_data=val_ds, epochs=args.finetune_epochs)
 
     output = Path(args.output)
     output.parent.mkdir(parents=True, exist_ok=True)
     model.save(output)
-    class_map = Path(args.class_map)
+    manifest.save(f"{output}.manifest.json")
+    Path(f"{output}.history.json").write_text(json.dumps({
+        "configuration": vars(args), "head": head.history, "finetune": fine.history,
+    }, indent=2, default=str) + "\n", encoding="utf-8")
     class_map.parent.mkdir(parents=True, exist_ok=True)
     class_map.write_text(json.dumps(class_names, ensure_ascii=False, indent=2) + "\n")
     return output
@@ -119,10 +135,10 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--data-dir", required=True)
     parser.add_argument("--output", required=True)
     parser.add_argument("--class-map", required=True)
-    parser.add_argument("--backbone", default="mobilenet-v2")
+    parser.add_argument("--backbone", choices=tuple(BACKBONES), default="mobilenet-v2")
     parser.add_argument("--input-size", type=int, default=128)
-    parser.add_argument("--input-scale", default="minus1_1")
-    parser.add_argument("--width-multiplier", type=float, default=0.5)
+    parser.add_argument("--input-scale", default="auto")
+    parser.add_argument("--width-multiplier", type=float, default=1.0)
     parser.add_argument("--weights", choices=("imagenet", "none"), default="imagenet")
     parser.add_argument("--batch-size", type=int, default=32)
     parser.add_argument("--head-epochs", type=int, default=3)

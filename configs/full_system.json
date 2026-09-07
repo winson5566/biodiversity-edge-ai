@@ -1,17 +1,14 @@
 {
-  "scope": "large-scale biodiversity edge AI system",
-  "dataset": {
-    "name": "iNaturalist 2021",
-    "classes": 10000,
-    "training_images": 2686843,
-    "validation_images": 50000,
-    "test_images": 50000
-  },
-  "deployment": {
-    "device": "Raspberry Pi Zero 2 W",
-    "vision_model": "EfficientNet-B0",
-    "vision_formats": ["fp32", "drq", "full_int8"],
-    "geo_prior": true,
-    "fusion_modes": ["bayes", "log_linear"]
-  }
+  "name": "full",
+  "annotations": "raw/inat2021/train.json",
+  "images_root": "raw/inat2021",
+  "num_classes": 10000,
+  "min_per_class": 20,
+  "max_per_class": null,
+  "backbone": "mobilenet-v2",
+  "input_size": 224,
+  "formats": [
+    "fp32",
+    "drq"
+  ]
 }

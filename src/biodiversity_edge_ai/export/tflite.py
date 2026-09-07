@@ -66,6 +66,16 @@ def _array_samples(path: Path, limit: int) -> Iterable[list[np.ndarray]]:
 def export_model(args: argparse.Namespace) -> tuple[Path, Path]:
     tf = _tensorflow()
     class_names = load_class_names(args.class_map)
+    training_manifest = Path(f"{args.keras_model}.manifest.json")
+    if args.role == "vision" and training_manifest.is_file():
+        contract = ModelManifest.load(training_manifest)
+        if contract.class_map_sha256 != class_map_sha256(class_names):
+            raise ValueError("export class map differs from training class map")
+        if args.input_scale not in ("auto", contract.input_scale):
+            raise ValueError("export input scaling differs from training")
+        args.input_scale = contract.input_scale
+    elif args.input_scale == "auto":
+        raise ValueError("model has no training manifest; supply --input-scale explicitly")
     model = tf.keras.models.load_model(args.keras_model, compile=False)
     if int(model.output_shape[-1]) != len(class_names):
         raise ValueError("model output size does not match the class map")
@@ -160,8 +170,8 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument(
         "--input-scale",
-        default="0_255",
-        choices=("0_255", "0_1", "minus1_1", "imagenet", "encoded_geo"),
+        default="auto",
+        choices=("auto", "0_255", "0_1", "minus1_1", "imagenet", "caffe", "encoded_geo"),
     )
     parser.add_argument("--representative-images")
     parser.add_argument("--representative-npy")

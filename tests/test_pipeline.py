@@ -63,6 +63,14 @@ class PipelineTests(unittest.TestCase):
         self.assertEqual(vision_only[0].class_id, 0)
         self.assertEqual(fused[0].class_id, 1)
 
+    def test_top5_returns_available_classes_for_small_dataset(self):
+        pipeline = BiodiversityPipeline(
+            vision_runner=FakeRunner([0.8, 0.2]),
+            vision_manifest=self.vision_manifest, class_names=self.classes,
+        )
+        predictions = pipeline.predict(self.image, k=5)
+        self.assertEqual([p.class_id for p in predictions], [0, 1])
+
     def test_incomplete_location_does_not_invoke_geo_prior(self):
         geo_runner = FakeRunner([0.01, 0.99])
         pipeline = BiodiversityPipeline(

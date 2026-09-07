@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import csv
+import json
 from pathlib import Path
 from typing import Any
 
@@ -60,6 +61,7 @@ def _random_features(tf: Any, batch_size: Any) -> Any:
 
 def train(args: argparse.Namespace) -> Path:
     tf = _tensorflow()
+    tf.keras.utils.set_random_seed(args.seed)
     features, labels = load_observations(args.observations)
     if labels.min() < 0 or labels.max() >= args.num_classes:
         raise ValueError("label_id lies outside configured class range")
@@ -76,6 +78,7 @@ def train(args: argparse.Namespace) -> Path:
     )
     optimizer = tf.keras.optimizers.Adam(args.learning_rate)
     epsilon = tf.constant(1e-5, dtype=tf.float32)
+    history = []
 
     for epoch in range(args.epochs):
         losses: list[float] = []
@@ -98,22 +101,27 @@ def train(args: argparse.Namespace) -> Path:
             optimizer.apply_gradients(zip(gradients, model.trainable_variables))
             losses.append(float(loss))
         print(f"epoch={epoch + 1} loss={np.mean(losses):.6f}")
+        history.append(float(np.mean(losses)))
 
+    val_accuracy = None
     if args.validation_observations:
         val_features, val_labels = load_observations(args.validation_observations)
         if val_labels.min() < 0 or val_labels.max() >= args.num_classes:
             raise ValueError("validation label_id lies outside configured class range")
-        val_predictions = model.predict(
-            val_features, batch_size=args.batch_size, verbose=0
-        )
-        val_accuracy = float(
-            np.mean(np.argmax(val_predictions, axis=1) == val_labels)
-        )
+        correct = 0
+        for start in range(0, len(val_labels), args.batch_size):
+            stop = start + args.batch_size
+            predictions = model(val_features[start:stop], training=False).numpy()
+            correct += int(np.sum(np.argmax(predictions, axis=1) == val_labels[start:stop]))
+        val_accuracy = correct / len(val_labels)
         print(f"validation_top1_accuracy={val_accuracy:.6f}")
 
     output = Path(args.output)
     output.parent.mkdir(parents=True, exist_ok=True)
     model.save(output)
+    Path(f"{output}.history.json").write_text(json.dumps({
+        "configuration": vars(args), "loss": history, "validation_top1": val_accuracy,
+    }, indent=2, default=str) + "\n", encoding="utf-8")
     return output
 
 

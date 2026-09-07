@@ -132,7 +132,7 @@ class BiodiversityPipeline:
             )
         else:
             probabilities = vision
-        indices, scores = top_k(probabilities, k=k)
+        indices, scores = top_k(probabilities, k=min(k, len(self.class_names)))
         return [
             Prediction(int(index), self.class_names[int(index)], float(score))
             for index, score in zip(indices, scores)

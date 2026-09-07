@@ -1,26 +1,17 @@
 {
-  "scope": "small reproducible demonstration",
-  "dataset": {
-    "classes": 10,
-    "input_size": 128,
-    "split": "fixed train/val/test",
-    "class_map": "data/prepared/class_map.json"
-  },
-  "vision": {
-    "backbone": "mobilenet-v2",
-    "width_multiplier": 0.5,
-    "input_scale": "minus1_1"
-  },
-  "geo_prior": {
-    "input_features": 6,
-    "embedding_dim": 256,
-    "fusion_mode": "log_linear",
-    "alpha_selection": "validation_only"
-  },
-  "optimizations": [
+  "name": "small",
+  "annotations": "raw/inat2021/train_mini.json",
+  "images_root": "raw/inat2021",
+  "num_classes": 10,
+  "min_per_class": 20,
+  "max_per_class": 50,
+  "backbone": "mobilenet-v2",
+  "input_size": 128,
+  "head_epochs": 1,
+  "finetune_epochs": 1,
+  "geo_epochs": 3,
+  "formats": [
     "fp32",
-    "drq",
-    "full_int8"
-  ],
-  "note": "Measure every exported variant under the same evaluation conditions."
+    "drq"
+  ]
 }

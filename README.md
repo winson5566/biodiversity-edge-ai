@@ -2,45 +2,57 @@
 
 **English** · [简体中文](README.zh-CN.md)
 
-An offline species-recognition system for Raspberry Pi. It trains an image classifier and a spatio-temporal Geo Prior, exports TFLite models, evaluates quantization, and runs camera inference on-device.
+Offline species recognition with seven vision backbones, a spatio-temporal Geo Prior, TFLite quantization, and Raspberry Pi camera inference.
+
+[Quick start](#quick-start) · [Dataset](#dataset) · [Training](#training) · [Evaluation](#evaluation) · [Raspberry Pi](#raspberry-pi) · [Results](#results) · [Architecture](#architecture)
 
 ## Quick start
 
-Use Python 3.10–3.12; Python 3.12 is recommended.
+Run from the repository root on macOS or Linux, with Python 3.10–3.12. Python 3.12 is the verified workstation version.
 
 ```bash
 git clone https://github.com/winson5566/biodiversity-edge-ai.git
 cd biodiversity-edge-ai
 python3.12 -m venv .venv
 source .venv/bin/activate
-python -m pip install -e '.[train,dev]'
+python -m pip install -c constraints-workstation.txt -e '.[train,dev]'
 make smoke
 ```
 
-`make smoke` needs no download. It creates 24 synthetic images, trains both models, exports FP32/DRQ/full-INT8 variants, and writes a comparison table to `artifacts/smoke/results/tradeoffs.md`.
+This generates 24 images, trains both models without pretrained downloads, exports FP32/DRQ/full INT8, and evaluates each format with and without Geo fusion. Inspect `artifacts/runs/smoke-mobilenet-v2/results/tradeoffs.md`. Synthetic accuracy only checks pipeline execution.
+
+`make test` runs the unit tests. `BIODIVERSITY_TF_TESTS=1 make test` also checks all seven backbones and matching training/device preprocessing.
 
 ## Dataset
 
-The default source is **iNaturalist 2021 Train Mini**: 500,000 images across 10,000 species. Full Train uses the same pipeline.
+The default is iNaturalist 2021 Train Mini: 500,000 images, 10,000 species. Full Train contains 2,686,843 images and uses the same workflow. Location and date fields are supplied in the [official annotation format](https://github.com/visipedia/inat_comp/tree/master/2021#annotation-format).
 
-| Mode | Download | Run |
-|---|---:|---|
-| Mini (default) | 42 GB images + 45 MB annotations | `make workstation` |
-| Full Train | 224 GB images + 221 MB annotations | `make workstation DATA_SOURCE=full` |
+### Download and extract
 
-Download the Mini pair, verify it, and extract it into `raw/inat2021`:
+Download the Mini image and annotation archives (about 42 GB + 45 MB):
 
 ```bash
-mkdir -p raw/inat2021 && cd raw/inat2021
-curl -C - -O https://ml-inat-competition-datasets.s3.amazonaws.com/2021/train_mini.tar.gz
-curl -C - -O https://ml-inat-competition-datasets.s3.amazonaws.com/2021/train_mini.json.tar.gz
-md5sum train_mini.tar.gz train_mini.json.tar.gz
+mkdir -p raw/inat2021
+cd raw/inat2021
+curl -fL -C - -O https://ml-inat-competition-datasets.s3.amazonaws.com/2021/train_mini.tar.gz
+curl -fL -C - -O https://ml-inat-competition-datasets.s3.amazonaws.com/2021/train_mini.json.tar.gz
+# Linux: md5sum train_mini.tar.gz train_mini.json.tar.gz
+# macOS: md5 train_mini.tar.gz train_mini.json.tar.gz
 tar -xzf train_mini.tar.gz
 tar -xzf train_mini.json.tar.gz
 cd ../..
 ```
 
-Expected Mini MD5 values are `db6ed8330e634445efc8fec83ae81442` and `395a35be3651d86dc3b0d365b8ea5f92`. On macOS, use `md5` in place of `md5sum`.
+Verify MD5 **before extracting**: images `db6ed8330e634445efc8fec83ae81442`; annotations `395a35be3651d86dc3b0d365b8ea5f92`. Allow space for both archives and extracted images. Expected layout:
+
+```text
+raw/inat2021/
+├── train_mini.json
+└── train_mini/
+    └── category/image.jpg
+```
+
+For Full Train, download and extract `train.tar.gz` and `train.json.tar.gz` into the same root, then use `DATA_SOURCE=full`.
 
 <details>
 <summary>All dataset downloads, hashes, and S3 locations</summary>
@@ -60,119 +72,122 @@ Images are JPEG files with a maximum dimension of 500 pixels. Extraction creates
 
 </details>
 
-The standard pipeline makes a deterministic 70%/15%/15% split from the selected training source. It does not automatically use the official Validation or public Test downloads. Public Test has no labels, so it cannot calculate local accuracy.
-
-## Train and export
-
-Run the complete Mini workflow:
+### Prepare the experiment
 
 ```bash
-make workstation
+make prepare CONFIG=configs/small_demo.json
 ```
 
-This prepares data, trains the selected vision backbone (MobileNetV2 by default) and the six-feature Geo Prior, exports TFLite models, and creates benchmark tables.
-
-MobileNetV2 is the default backbone. Select any evaluated architecture with `VISION_BACKBONE`: `efficientnet-b0`, `mobilenet-v3-large`, `mobilenet-v2`, `resnet-50`, `resnet-101`, `convnext-tiny`, or `convnext-small`.
-
-```bash
-make workstation VISION_BACKBONE=efficientnet-b0
-```
-
-Use a small reproducible subset:
-
-```bash
-make workstation NUM_CLASSES=10 MAX_PER_CLASS=50 \
-  DATASET=data/prepared_demo \
-  MODEL_DIR=artifacts/models_demo RESULT_DIR=artifacts/results_demo
-```
-
-| Stage | Command | Main output |
-|---|---|---|
-| Prepare | `make prepare` | fixed splits, metadata CSVs, `class_map.json` |
-| Train | `make train` | `vision_baseline.keras`, `geo_prior.keras` |
-| Export | `make export` | FP32, DRQ, INT8, and Geo Prior TFLite |
-| Compare | `make benchmark` | JSON, CSV, and Markdown trade-off tables |
-
-## Architecture
-
-### Code layout
+The preparation step joins image IDs with category IDs, fixes a shared class order, validates image files, and creates approximately 70%/15%/15% train/validation/test splits (rounded per class). It writes:
 
 ```text
-src/biodiversity_edge_ai/
-├── data/prepare.py           deterministic iNaturalist split preparation
-├── models/                   vision backbones and six-feature Geo Prior
-├── training/                 vision and Geo Prior training logic
-├── export/tflite.py          FP32, DRQ, and full-INT8 TFLite export
-├── evaluation/               benchmark collection and trade-off summaries
-├── device/                   image, camera, and ST7789 display inference
-├── metadata.py               location/date feature encoding
-├── manifest.py               deployable-artifact compatibility checks
-├── fusion.py                 vision and Geo Prior fusion
-├── inference.py              TensorFlow Lite runtime wrapper
-└── pipeline.py               end-to-end prediction orchestration
-
-scripts/                      command-line entry points
-tests/                        unit tests
-configs/                      example run configurations
-Makefile                      reproducible workflow targets
+artifacts/runs/small-mobilenet-v2/dataset/
+├── dataset_manifest.json
+├── class_map.json
+├── images/{train,val,test}/<class_id>/
+└── metadata/{train,val,test}.csv
 ```
 
-### Workflow
+Images are symlinked; keep the extracted source in place and unchanged. Metadata CSVs contain `filename, image_id, source_category_id, label_id, class_name, latitude, longitude, date, valid, source_file`. Missing location/date is marked invalid. Geo training uses valid rows, while inference falls back to vision-only when metadata is unavailable.
 
-```mermaid
-flowchart LR
-  RAW[Images + labels + geo metadata] --> PREP[Prepare fixed splits]
-  PREP --> VTRAIN[Train selected vision backbone]
-  PREP --> GTRAIN[Train Geo Prior]
-  VTRAIN --> VEXPORT[Export vision TFLite: FP32 / DRQ / INT8]
-  GTRAIN --> GEXPORT[Export Geo Prior TFLite]
-  VEXPORT --> ART[Models + manifests + class map]
-  GEXPORT --> ART
-  ART --> VINF[Camera or image: vision inference]
-  ART --> GINF[Location + date: Geo Prior inference]
-  VINF --> FUSE[Validate and fuse predictions]
-  GINF --> FUSE
-  FUSE --> OUT[Top-K species result]
-```
+The official Validation and Public Test archives are optional and are not automatically used by these presets. Public Test has no public labels for local accuracy.
 
-Fusion requires matching class-map hashes and output dimensions. Missing location or date uses vision-only inference.
+## Training
 
-## Evaluate and deploy
+### Choose a workload
 
-Benchmark the standard variants on the same held-out images:
+| Workload | Command | Training source |
+|---|---|---|
+| Small subset | `make workstation CONFIG=configs/small_demo.json` | 10 classes, up to 50 images/class |
+| Mini, default | `make workstation` | 10,000 classes, all usable Mini images |
+| Full Train | `make workstation DATA_SOURCE=full` | 10,000 classes, all usable Full images |
+
+Real-data runs download ImageNet weights on first use. The presets are runnable starting configurations, not the exact hyperparameters behind every reported result.
+
+### Choose a model
 
 ```bash
-make benchmark
+make workstation CONFIG=configs/small_demo.json VISION_BACKBONE=efficientnet-b0
 ```
 
-Compare FP32, DRQ, and full INT8 by Top-1 accuracy, model size, invocation latency, end-to-end latency, memory, and energy. Keep the split, preprocessing, Geo Prior, fusion weight, Pi configuration, thread count, warm-up, and repetitions unchanged across runs.
+| Backbone option | External input preprocessing |
+|---|---|
+| `mobilenet-v2` | RGB scaled to [-1, 1] |
+| `mobilenet-v3-large` | RGB [0, 255]; model includes preprocessing |
+| `efficientnet-b0` | RGB [0, 255]; model includes preprocessing |
+| `resnet-50`, `resnet-101` | RGB → BGR, subtract ImageNet channel means |
+| `convnext-tiny`, `convnext-small` | RGB [0, 255]; model includes preprocessing |
 
-Predict one image:
+Training, calibration and inference share the same center crop, bilinear resize and pixel scaling. Input contracts follow [Keras Applications](https://keras.io/api/applications/). Training saves the contract beside the Keras model; export inherits and checks it.
+
+<details>
+<summary>Run all seven models on the same small subset</summary>
 
 ```bash
-PYTHONPATH=src python scripts/predict.py \
-  --image /path/to/photo.jpg \
-  --vision-model artifacts/models/vision_drq.tflite \
-  --vision-manifest artifacts/models/vision_drq.tflite.manifest.json \
-  --class-map data/prepared/class_map.json
+for model in mobilenet-v2 mobilenet-v3-large efficientnet-b0 \
+             resnet-50 resnet-101 convnext-tiny convnext-small; do
+  make workstation CONFIG=configs/small_demo.json VISION_BACKBONE="$model" || exit 1
+done
 ```
 
-For a Raspberry Pi camera, install PiCamera2, GPIO/SPI support, this project's `.[rpi]` dependencies, and a compatible TensorFlow Lite Runtime. Then run:
+Each model receives its own directory and the same deterministic class selection and split. This runs seven separate training jobs; use a workstation with sufficient memory.
+
+</details>
+
+### Configure and resume
+
+JSON presets in `configs/` are read directly by the workflow. Copy a preset and change epochs, input size, batch size, formats, threads or fusion weight. An explicit name gives the experiment a stable location:
 
 ```bash
-PYTHONPATH=src python scripts/rpi_camera.py \
-  --vision-model artifacts/models/vision_drq.tflite \
-  --vision-manifest artifacts/models/vision_drq.tflite.manifest.json \
-  --class-map data/prepared/class_map.json
+PYTHONPATH=src python -m biodiversity_edge_ai.workflow \
+  --config configs/small_demo.json --run my-experiment --dry-run
 ```
 
-Add `--display` for ST7789 output. Add `--geo-model`, `--geo-manifest`, `--latitude`, and `--longitude` for Geo Prior fusion.
+Remove `--dry-run` to execute. For external data, add `--annotations /data/train_mini.json --images-root /data`. Paths are relative to the repository working directory, not the JSON file.
 
-## Reference hardware and reported results
+Outputs are isolated under `artifacts/runs/<preset>-<backbone>/`, or `artifacts/runs/<run>/` with `RUN=my-experiment`. The directory records effective settings, source hashes, package versions, step logs, models and results. Repeating the same command reuses verified completed stages. Changed settings, source, environment or saved artifacts require a new run name. After an interrupted data extraction/preparation, use a new run name; source images are not re-downloaded.
 
-The following values are reported reference measurements, not outputs reproduced by `make smoke`. The report compares seven vision architectures; the default reproducible workflow above uses MobileNetV2.
+## Quantization and export
 
-### Raspberry Pi configuration
+```bash
+make export CONFIG=configs/small_demo.json
+```
+
+Each stage runs its prerequisites. Standard presets export FP32 and dynamic-range quantization (DRQ); the smoke preset additionally checks full INT8. To request full INT8 for another experiment, add `"int8"` to its `formats` list and use a new run name. Calibration samples come only from training images. Operator support can vary by backbone; full INT8 has been pipeline-tested with MobileNetV2.
+
+The deployable `models/` directory contains `class_map.json`, `vision_<format>.tflite`, `geo_prior_fp32.tflite`, and matching `.manifest.json` files. Keep models, manifests and class map together. Class-map hashes and output sizes must match for fusion.
+
+## Evaluation
+
+```bash
+make benchmark CONFIG=configs/small_demo.json
+```
+
+The workflow benchmarks every selected format twice: vision-only and log-linear Geo fusion. Results include Top-1/Top-5, model bytes, load time, invocation and pipeline latency, throughput, optional RSS memory, and host details. Raw JSON plus CSV/Markdown comparisons are saved in `results/`.
+
+Use validation data to choose `alpha` (default 0.3); reserve test data for the final comparison. Benchmark on the target Pi for device performance. Local workstation measurements are not Pi latency or battery measurements.
+
+<details>
+<summary>Benchmark exported models on the Pi</summary>
+
+Copy a held-out image subset and its matching metadata CSV along with the model bundle. Then run:
+
+```bash
+python scripts/benchmark_rpi.py \
+  --images evaluation/images --metadata-csv evaluation/test.csv \
+  --vision-model models/vision_drq.tflite \
+  --vision-manifest models/vision_drq.tflite.manifest.json \
+  --geo-model models/geo_prior_fp32.tflite \
+  --geo-manifest models/geo_prior_fp32.tflite.manifest.json \
+  --class-map models/class_map.json --threads 4 \
+  --warmup 10 --repetitions 5 --output results/pi-drq.json
+```
+
+For measured active-minus-idle power, add `--net-power-w <watts>` to derive energy per invocation and FPS/W. Battery duration requires a physical discharge test with a defined capture interval; it is not inferred from this benchmark. Keep thread count, data, warm-up and repetitions fixed when comparing formats.
+
+</details>
+
+## Raspberry Pi
 
 | Component | Configuration |
 |---|---|
@@ -185,6 +200,50 @@ The following values are reported reference measurements, not outputs reproduced
 | Bill of materials | NZ$158, excluding the custom enclosure and buttons |
 
 The hardware configuration includes GPS. The current camera command accepts fixed `--latitude` and `--longitude`; live GPS acquisition is not implemented in this repository.
+
+### Install and copy models
+
+Use Raspberry Pi OS Lite 64-bit with Python 3.10–3.12 and a matching TFLite runtime wheel. For example, Raspberry Pi OS Bookworm uses Python 3.11. Follow the [TFLite Python runtime guide](https://www.tensorflow.org/lite/guide/python) if a wheel is unavailable for the installed Python/architecture.
+
+On the Pi, clone the repository and run from its root:
+
+```bash
+sudo apt update
+sudo apt install -y python3-venv python3-picamera2 python3-spidev python3-gpiozero
+python3 -m venv --system-site-packages .venv
+source .venv/bin/activate
+python -m pip install -e '.[rpi]' tflite-runtime
+```
+
+Copy the contents of the workstation experiment's `models/` directory into `models/` on the Pi. Only the TFLite files, their manifests and `class_map.json` are needed. For the display, enable SPI and use the wiring declared in `device/waveshare/config.py`.
+
+### Predict
+
+```bash
+python scripts/predict.py \
+  --image /path/to/photo.jpg \
+  --vision-model models/vision_drq.tflite \
+  --vision-manifest models/vision_drq.tflite.manifest.json \
+  --class-map models/class_map.json
+```
+
+For a camera capture with Geo fusion (replace the example coordinates with your location):
+
+```bash
+python scripts/rpi_camera.py \
+  --vision-model models/vision_drq.tflite \
+  --vision-manifest models/vision_drq.tflite.manifest.json \
+  --class-map models/class_map.json \
+  --geo-model models/geo_prior_fp32.tflite \
+  --geo-manifest models/geo_prior_fp32.tflite.manifest.json \
+  --latitude -43.5 --longitude 172.6 --threads 4
+```
+
+Add `--display` for ST7789 output. Image prediction with Geo fusion also requires `--date YYYY-MM-DD`; camera inference uses the Pi's current date. Camera arrays use the RGB byte order specified by [Picamera2](https://github.com/raspberrypi/picamera2/blob/main/picamera2/request.py). Camera and display operation require testing on the physical device.
+
+## Results
+
+Reference results below are transcribed from the project report (Tables 6, 7, 9, 11, 12 and 13). They cover seven trained vision architectures and their FP32/DRQ variants. Model size, training setup and evaluation split may differ from the supplied runnable presets.
 
 ### iNat2021 validation accuracy
 
@@ -200,7 +259,22 @@ The hardware configuration includes GPS. The current camera command accepts fixe
 
 For EfficientNet-B0, Geo Prior fusion with log-linear α = 0.3 raises Top-1 from 73.77% to 83.26% (FP32), and from 70.84% to 81.33% (DRQ).
 
-### Model size and complexity
+### Battery life
+
+Measured with a 30-second capture-infer-display cycle.
+
+| Model | FP32 | DRQ |
+|---|---:|---:|
+| EfficientNet-B0 | 4.68 h | 4.55 h |
+| MobileNetV3-Large | 4.66 h | 4.62 h |
+| MobileNetV2 | 4.65 h | 4.60 h |
+| ResNet-50 | — | 4.40 h |
+| ResNet-101 | — | 4.25 h |
+| ConvNeXt-Tiny | — | 3.93 h |
+| ConvNeXt-Small | — | 3.70 h |
+
+<details>
+<summary>Model size and complexity</summary>
 
 | Model | FP32 size | DRQ size | Parameters | FLOPs |
 |---|---:|---:|---:|---:|
@@ -212,7 +286,10 @@ For EfficientNet-B0, Geo Prior fusion with log-linear α = 0.3 raises Top-1 from
 | ConvNeXt-Tiny | 135.44 MB | 34.05 MB | 35.50 M | 9.00 G |
 | ConvNeXt-Small | 217.94 MB | 54.84 MB | 58.13 M | 17.40 G |
 
-### Pi Zero 2 W latency and throughput
+</details>
+
+<details>
+<summary>Pi Zero 2 W latency and throughput</summary>
 
 Each entry is mean latency in milliseconds / FPS. `—` means that format was not measured on the device.
 
@@ -226,20 +303,65 @@ Each entry is mean latency in milliseconds / FPS. `—` means that format was no
 | ConvNeXt-Tiny | — | — | 6,484.90 / 0.15 | 5,243.91 / 0.19 |
 | ConvNeXt-Small | — | — | 11,302.33 / 0.09 | 10,884.12 / 0.09 |
 
-### Energy and battery life
+</details>
 
-Energy measurements use four inference threads and a net device power of 1.5 W. Battery life uses a 30-second capture-infer-display cycle.
+<details>
+<summary>Energy per inference and FPS/W</summary>
 
-| Model | FP32: energy / FPS/W / life | DRQ: energy / FPS/W / life |
-|---|---:|---:|
-| EfficientNet-B0 | 1,127.8 mJ / 0.89 / 4.68 h | 691.2 mJ / 1.45 / 4.55 h |
-| MobileNetV3-Large | 174.4 mJ / 5.73 / 4.66 h | 308.0 mJ / 3.25 / 4.62 h |
-| MobileNetV2 | 171.2 mJ / 5.84 / 4.65 h | 273.7 mJ / 3.65 / 4.60 h |
-| ResNet-50 | — | 980.4 mJ / 1.02 / 4.40 h |
-| ResNet-101 | — | 1,785.7 mJ / 0.56 / 4.25 h |
-| ConvNeXt-Tiny | — | 7,894.7 mJ / 0.13 / 3.93 h |
-| ConvNeXt-Small | — | 16,666.7 mJ / 0.06 / 3.70 h |
+Derived from measured throughput with four inference threads and net inference power of 1.5 W (2.5 W active minus 1.0 W idle).
 
-## Verification
+| Model | FP32 mJ | FP32 FPS/W | DRQ mJ | DRQ FPS/W |
+|---|---:|---:|---:|---:|
+| EfficientNet-B0 | 1,127.8 mJ | 0.89 | 691.2 mJ | 1.45 |
+| MobileNetV3-Large | 174.4 mJ | 5.73 | 308.0 mJ | 3.25 |
+| MobileNetV2 | 171.2 mJ | 5.84 | 273.7 mJ | 3.65 |
+| ResNet-50 | — | — | 980.4 mJ | 1.02 |
+| ResNet-101 | — | — | 1,785.7 mJ | 0.56 |
+| ConvNeXt-Tiny | — | — | 7,894.7 mJ | 0.13 |
+| ConvNeXt-Small | — | — | 16,666.7 mJ | 0.06 |
 
-Run the full generated-data check with `make smoke`, and the unit tests with `make test`.
+</details>
+
+
+## Architecture
+
+### Code layout
+
+```text
+src/biodiversity_edge_ai/
+├── workflow.py       configured experiment stages and resume checks
+├── config.py         validated experiment settings
+├── data/             image/metadata preparation and synthetic test data
+├── models/           seven vision backbones, input contracts, Geo Prior
+├── training/         vision and Geo Prior training
+├── export/           TFLite conversion and calibration
+├── evaluation/       benchmarks and comparison tables
+├── device/           image CLI, Pi camera, ST7789 display
+├── metadata.py       longitude/latitude/date feature encoding
+├── manifest.py       model contracts and compatibility checks
+├── inference.py      image preprocessing and TFLite runtime
+├── fusion.py         Bayesian and log-linear fusion
+└── pipeline.py       shared prediction pipeline
+
+configs/              Mini, Full, small-subset and smoke presets
+scripts/              individual command-line entry points
+tests/                unit and optional TensorFlow integration tests
+Makefile              short commands for workflow stages
+```
+
+### Workflow
+
+```mermaid
+flowchart TD
+  A["Images, labels and geo metadata"] --> B["Fixed train / validation / test splits"]
+  B --> C["Train selected vision backbone"]
+  B --> D["Train Geo Prior"]
+  C --> E["Export FP32 / DRQ / optional INT8"]
+  D --> F["Export Geo Prior TFLite"]
+  E --> G["Models, manifests and class map"]
+  F --> G
+  G --> H["Evaluate vision-only and Geo fusion"]
+  G --> I["Raspberry Pi: camera image + location + date"]
+  I --> J["Vision / Geo inference and fusion"]
+  J --> K["Top-K species, optional display"]
+```

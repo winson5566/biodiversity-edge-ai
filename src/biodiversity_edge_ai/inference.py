@@ -47,6 +47,8 @@ def preprocess_image(image: Image.Image, manifest: ModelManifest) -> np.ndarray:
         return array / 255.0
     if scale == "minus1_1":
         return array / 127.5 - 1.0
+    if scale == "caffe":
+        return array[..., ::-1] - np.asarray([103.939, 116.779, 123.68], dtype=np.float32)
     if scale == "imagenet":
         mean = np.asarray([0.485, 0.456, 0.406], dtype=np.float32)
         std = np.asarray([0.229, 0.224, 0.225], dtype=np.float32)

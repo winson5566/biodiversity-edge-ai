@@ -51,7 +51,8 @@ def main() -> None:
     camera = Picamera2()
     camera.configure(
         camera.create_still_configuration(
-            main={"size": (args.camera_width, args.camera_height), "format": "RGB888"}
+            # Picamera2's BGR888 produces RGB channel order in capture_array.
+            main={"size": (args.camera_width, args.camera_height), "format": "BGR888"}
         )
     )
     camera.start()
@@ -60,6 +61,7 @@ def main() -> None:
         image = Image.fromarray(camera.capture_array())
     finally:
         camera.stop()
+        camera.close()
     if args.save_image:
         image.save(args.save_image)
     location_used = (
