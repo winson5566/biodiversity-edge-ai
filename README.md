@@ -95,36 +95,44 @@ make workstation NUM_CLASSES=10 MAX_PER_CLASS=50 \
 
 ## Architecture
 
+### Code layout
+
+```text
+src/biodiversity_edge_ai/
+├── data/prepare.py           deterministic iNaturalist split preparation
+├── models/                   vision backbones and six-feature Geo Prior
+├── training/                 vision and Geo Prior training logic
+├── export/tflite.py          FP32, DRQ, and full-INT8 TFLite export
+├── evaluation/               benchmark collection and trade-off summaries
+├── device/                   image, camera, and ST7789 display inference
+├── metadata.py               location/date feature encoding
+├── manifest.py               deployable-artifact compatibility checks
+├── fusion.py                 vision and Geo Prior fusion
+├── inference.py              TensorFlow Lite runtime wrapper
+└── pipeline.py               end-to-end prediction orchestration
+
+scripts/                      command-line entry points
+tests/                        unit tests
+configs/                      example run configurations
+Makefile                      reproducible workflow targets
+```
+
+### Workflow
+
 ```mermaid
 flowchart LR
-  subgraph WS[Workstation]
-    RAW[Images + labels + geo metadata] --> PREP[Prepare fixed splits]
-    PREP --> VTRAIN[Train vision model]
-    PREP --> GTRAIN[Train Geo Prior]
-    VTRAIN --> VEXPORT[Export vision TFLite variants]
-    GTRAIN --> GEXPORT[Export Geo Prior TFLite]
-  end
-
-  subgraph ART[Deployable artifacts]
-    MAP[class_map.json]
-    VM[vision.tflite + manifest]
-    GM[geo_prior.tflite + manifest]
-  end
-
-  subgraph PI[Raspberry Pi]
-    IMAGE[Camera frame or image] --> VINF[Vision inference]
-    META[Latitude + longitude + date] --> GINF[Geo Prior inference]
-    VINF --> FUSE[Validate artifacts and fuse]
-    GINF --> FUSE
-    FUSE --> OUT[Top-K species prediction]
-  end
-
-  VEXPORT --> VM
-  GEXPORT --> GM
-  MAP --> VINF
-  MAP --> GINF
-  VM --> VINF
-  GM --> GINF
+  RAW[Images + labels + geo metadata] --> PREP[Prepare fixed splits]
+  PREP --> VTRAIN[Train selected vision backbone]
+  PREP --> GTRAIN[Train Geo Prior]
+  VTRAIN --> VEXPORT[Export vision TFLite: FP32 / DRQ / INT8]
+  GTRAIN --> GEXPORT[Export Geo Prior TFLite]
+  VEXPORT --> ART[Models + manifests + class map]
+  GEXPORT --> ART
+  ART --> VINF[Camera or image: vision inference]
+  ART --> GINF[Location + date: Geo Prior inference]
+  VINF --> FUSE[Validate and fuse predictions]
+  GINF --> FUSE
+  FUSE --> OUT[Top-K species result]
 ```
 
 Fusion requires matching class-map hashes and output dimensions. Missing location or date uses vision-only inference.

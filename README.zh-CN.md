@@ -95,36 +95,44 @@ make workstation NUM_CLASSES=10 MAX_PER_CLASS=50 \
 
 ## 系统架构
 
+### 代码目录
+
+```text
+src/biodiversity_edge_ai/
+├── data/prepare.py           确定性的 iNaturalist 数据划分
+├── models/                   视觉骨干模型和六特征 Geo Prior
+├── training/                 视觉模型与 Geo Prior 的训练逻辑
+├── export/tflite.py          FP32、DRQ、全 INT8 TFLite 导出
+├── evaluation/               基准数据收集和折中表汇总
+├── device/                   图片、相机与 ST7789 显示推理
+├── metadata.py               位置和日期特征编码
+├── manifest.py               部署产物兼容性检查
+├── fusion.py                 视觉模型与 Geo Prior 融合
+├── inference.py              TensorFlow Lite 运行时封装
+└── pipeline.py               端到端预测编排
+
+scripts/                      命令行入口
+tests/                        单元测试
+configs/                      示例运行配置
+Makefile                      可复现流程目标
+```
+
+### 工作流程
+
 ```mermaid
 flowchart LR
-  subgraph WS[工作站]
-    RAW[图片 + 标签 + 地理元数据] --> PREP[准备固定划分]
-    PREP --> VTRAIN[训练视觉模型]
-    PREP --> GTRAIN[训练 Geo Prior]
-    VTRAIN --> VEXPORT[导出视觉 TFLite 变体]
-    GTRAIN --> GEXPORT[导出 Geo Prior TFLite]
-  end
-
-  subgraph ART[部署产物]
-    MAP[class_map.json]
-    VM[vision.tflite + manifest]
-    GM[geo_prior.tflite + manifest]
-  end
-
-  subgraph PI[树莓派]
-    IMAGE[相机画面或图片] --> VINF[视觉推理]
-    META[纬度 + 经度 + 日期] --> GINF[Geo Prior 推理]
-    VINF --> FUSE[验证产物并融合]
-    GINF --> FUSE
-    FUSE --> OUT[Top-K 物种预测]
-  end
-
-  VEXPORT --> VM
-  GEXPORT --> GM
-  MAP --> VINF
-  MAP --> GINF
-  VM --> VINF
-  GM --> GINF
+  RAW[图片 + 标签 + 地理元数据] --> PREP[准备固定划分]
+  PREP --> VTRAIN[训练所选视觉骨干模型]
+  PREP --> GTRAIN[训练 Geo Prior]
+  VTRAIN --> VEXPORT[导出视觉 TFLite：FP32 / DRQ / INT8]
+  GTRAIN --> GEXPORT[导出 Geo Prior TFLite]
+  VEXPORT --> ART[模型 + manifest + 类别映射]
+  GEXPORT --> ART
+  ART --> VINF[相机或图片：视觉推理]
+  ART --> GINF[位置 + 日期：Geo Prior 推理]
+  VINF --> FUSE[验证并融合预测]
+  GINF --> FUSE
+  FUSE --> OUT[Top-K 物种结果]
 ```
 
 融合要求类别映射哈希和输出维度一致。缺少位置或日期时，系统使用纯视觉推理。
