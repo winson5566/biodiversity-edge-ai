@@ -2,7 +2,7 @@
 
 [English](README.md) · **简体中文**
 
-一个可在树莓派离线运行的物种识别系统。它训练图像分类模型和时空 Geo Prior，导出 TFLite 模型，评估量化与剪枝，并支持相机推理。
+一个可在树莓派离线运行的物种识别系统。它训练图像分类模型和时空 Geo Prior，导出 TFLite 模型，评估量化，并支持相机推理。
 
 ## 快速开始
 
@@ -17,7 +17,7 @@ python -m pip install -e '.[train,dev]'
 make smoke
 ```
 
-`make smoke` 无需下载数据集。它生成 24 张合成图片，训练两个模型，导出 FP32/DRQ/INT8，进行 50% 剪枝，并将对比表写入 `artifacts/smoke/results/tradeoffs.md`。
+`make smoke` 无需下载数据集。它生成 24 张合成图片，训练两个模型，导出 FP32/DRQ/全 INT8，并将对比表写入 `artifacts/smoke/results/tradeoffs.md`。
 
 ## 数据集
 
@@ -70,9 +70,9 @@ Mini 的 MD5 应为 `db6ed8330e634445efc8fec83ae81442` 和 `395a35be3651d86dc3b0
 make workstation
 ```
 
-该命令完成数据准备、MobileNetV2 和六特征 Geo Prior 训练、TFLite 导出、视觉模型剪枝和基准对比。
+该命令完成数据准备、MobileNetV2 和六特征 Geo Prior 训练、TFLite 导出和基准对比。
 
-小样本课堂演示：
+小样本可复现运行：
 
 ```bash
 make workstation NUM_CLASSES=10 MAX_PER_CLASS=50 \
@@ -85,7 +85,6 @@ make workstation NUM_CLASSES=10 MAX_PER_CLASS=50 \
 | 数据准备 | `make prepare` | 固定划分、元数据 CSV、`class_map.json` |
 | 训练 | `make train` | `vision_baseline.keras`、`geo_prior.keras` |
 | 导出 | `make export` | FP32、DRQ、INT8 和 Geo Prior TFLite |
-| 剪枝 | `make optimize` | 50% 剪枝后的 DRQ TFLite |
 | 对比 | `make benchmark` | JSON、CSV 和 Markdown 折中表 |
 
 ## 系统架构
@@ -96,7 +95,7 @@ flowchart LR
     RAW[图片 + 标签 + 地理元数据] --> PREP[准备固定划分]
     PREP --> VTRAIN[训练视觉模型]
     PREP --> GTRAIN[训练 Geo Prior]
-    VTRAIN --> VEXPORT[导出并优化视觉 TFLite]
+    VTRAIN --> VEXPORT[导出视觉 TFLite 变体]
     GTRAIN --> GEXPORT[导出 Geo Prior TFLite]
   end
 
@@ -132,7 +131,7 @@ flowchart LR
 make benchmark
 ```
 
-比较 FP32、DRQ、全 INT8 和剪枝 DRQ 的 Top-1、模型大小、推理耗时、端到端耗时、内存和能耗。各版本必须固定数据划分、预处理、Geo Prior、融合权重、树莓派配置、线程数、预热次数和重复次数。
+比较 FP32、DRQ、全 INT8 的 Top-1、模型大小、推理耗时、端到端耗时、内存和能耗。各版本必须固定数据划分、预处理、Geo Prior、融合权重、树莓派配置、线程数、预热次数和重复次数。
 
 识别单张图片：
 
@@ -155,20 +154,40 @@ PYTHONPATH=src python scripts/rpi_camera.py \
 
 追加 `--display` 使用 ST7789 屏幕；追加 `--geo-model`、`--geo-manifest`、`--latitude` 和 `--longitude` 使用 Geo Prior 融合。
 
-<details>
-<summary>已验证的微型流程与教学使用</summary>
+## 论文硬件配置与报告结果
 
-微型流程在 2026 年 9 月 8 日使用 Python 3.12.8、TensorFlow 2.16.2、Keras 3.8.0 和 Apple M4 工作站完成，覆盖数据准备、双模型训练、FP32/DRQ/INT8 转换、50% 剪枝、融合推理和折中表生成。
+下列数值是报告中的参考测量结果，并非由 `make smoke` 重新生成。它们对应报告中的 EfficientNet-B0 部署；上方默认可复现流程使用的是 MobileNetV2。
 
-| 版本 | 模型大小 | 合成数据 Top-1 | 端到端中位数 |
-|---|---:|---:|---:|
-| FP32 | 2,761,512 | 50% | 0.263 ms |
-| DRQ | 870,752 | 50% | 0.237 ms |
-| 全 INT8 | 973,752 | 50% | 0.192 ms |
-| 剪枝 50% + DRQ | 862,096 | 50% | 0.230 ms |
+### 树莓派配置
 
-这些是四张合成图片的工作站检查，不是实际数据或树莓派结果。60–90 分钟教学可使用 5–10 类子集，比较四种模型，再根据准确率、大小、延迟、内存和能耗做部署选择。
+| 部件 | 配置 |
+|---|---|
+| 计算单元 | Raspberry Pi Zero 2 W：四核 ARM Cortex-A53，1.0 GHz，512 MB RAM；Raspberry Pi OS Lite 64-bit |
+| 相机 | Raspberry Pi CSI Sony IMX219，8 MP |
+| 显示器 | 1.3 英寸 Waveshare IPS LCD（ST7789） |
+| 定位硬件 | L76K GPS |
+| 供电 | PiSugar 3 电池管理板，1,200 mAh 单节锂离子电池 |
+| 存储 | 32 GB microSD 卡 |
+| 物料成本 | NZ$158，不含定制外壳和按键 |
 
-</details>
+报告的硬件配置含 GPS。当前相机命令接收固定的 `--latitude` 和 `--longitude`；本仓库尚未实现实时 GPS 读取。
 
-运行核心测试：`make test`。
+### 验证集准确率
+
+| EfficientNet-B0 版本 | 纯视觉 Top-1 | Geo 融合 Top-1（log-linear，α = 0.3） |
+|---|---:|---:|
+| FP32 | 73.77% | 83.26% |
+| DRQ | 70.84% | 81.33% |
+
+### Pi Zero 2 W 部署
+
+| 版本，4 线程 | 模型大小 | 平均延迟 | 吞吐量 | 单次推理能耗 | 每瓦吞吐 | 续航 |
+|---|---:|---:|---:|---:|---:|---:|
+| FP32 | 64.07 MB | 753.08 ms | 1.33 FPS | 1,127.8 mJ | 0.89 FPS/W | 4.68 h |
+| DRQ | 16.15 MB | 461.50 ms | 2.17 FPS | 691.2 mJ | 1.45 FPS/W | 4.55 h |
+
+延迟、吞吐和能耗使用 4 个推理线程，设备净功耗为 1.5 W。续航以每 30 秒一次采集–推理–显示周期计算。
+
+## 验证
+
+运行完整的生成数据检查：`make smoke`；运行单元测试：`make test`。

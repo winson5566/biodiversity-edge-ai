@@ -2,7 +2,7 @@
 
 **English** · [简体中文](README.zh-CN.md)
 
-An offline species-recognition system for Raspberry Pi. It trains an image classifier and a spatio-temporal Geo Prior, exports TFLite models, evaluates quantization and pruning, and runs camera inference on-device.
+An offline species-recognition system for Raspberry Pi. It trains an image classifier and a spatio-temporal Geo Prior, exports TFLite models, evaluates quantization, and runs camera inference on-device.
 
 ## Quick start
 
@@ -17,7 +17,7 @@ python -m pip install -e '.[train,dev]'
 make smoke
 ```
 
-`make smoke` needs no download. It creates 24 synthetic images, trains both models, exports FP32/DRQ/INT8 variants, applies 50% pruning, and writes a comparison table to `artifacts/smoke/results/tradeoffs.md`.
+`make smoke` needs no download. It creates 24 synthetic images, trains both models, exports FP32/DRQ/full-INT8 variants, and writes a comparison table to `artifacts/smoke/results/tradeoffs.md`.
 
 ## Dataset
 
@@ -70,9 +70,9 @@ Run the complete Mini workflow:
 make workstation
 ```
 
-This prepares data, trains MobileNetV2 and the six-feature Geo Prior, exports TFLite models, prunes the vision model, and creates benchmark tables.
+This prepares data, trains MobileNetV2 and the six-feature Geo Prior, exports TFLite models, and creates benchmark tables.
 
-Use a small live-demo subset:
+Use a small reproducible subset:
 
 ```bash
 make workstation NUM_CLASSES=10 MAX_PER_CLASS=50 \
@@ -85,7 +85,6 @@ make workstation NUM_CLASSES=10 MAX_PER_CLASS=50 \
 | Prepare | `make prepare` | fixed splits, metadata CSVs, `class_map.json` |
 | Train | `make train` | `vision_baseline.keras`, `geo_prior.keras` |
 | Export | `make export` | FP32, DRQ, INT8, and Geo Prior TFLite |
-| Prune | `make optimize` | 50% pruned DRQ TFLite |
 | Compare | `make benchmark` | JSON, CSV, and Markdown trade-off tables |
 
 ## Architecture
@@ -96,7 +95,7 @@ flowchart LR
     RAW[Images + labels + geo metadata] --> PREP[Prepare fixed splits]
     PREP --> VTRAIN[Train vision model]
     PREP --> GTRAIN[Train Geo Prior]
-    VTRAIN --> VEXPORT[Export and optimize vision TFLite]
+    VTRAIN --> VEXPORT[Export vision TFLite variants]
     GTRAIN --> GEXPORT[Export Geo Prior TFLite]
   end
 
@@ -132,7 +131,7 @@ Benchmark the standard variants on the same held-out images:
 make benchmark
 ```
 
-Compare FP32, DRQ, full INT8, and pruned DRQ by Top-1 accuracy, model size, invocation latency, end-to-end latency, memory, and energy. Keep the split, preprocessing, Geo Prior, fusion weight, Pi configuration, thread count, warm-up, and repetitions unchanged across runs.
+Compare FP32, DRQ, and full INT8 by Top-1 accuracy, model size, invocation latency, end-to-end latency, memory, and energy. Keep the split, preprocessing, Geo Prior, fusion weight, Pi configuration, thread count, warm-up, and repetitions unchanged across runs.
 
 Predict one image:
 
@@ -155,20 +154,40 @@ PYTHONPATH=src python scripts/rpi_camera.py \
 
 Add `--display` for ST7789 output. Add `--geo-model`, `--geo-manifest`, `--latitude`, and `--longitude` for Geo Prior fusion.
 
-<details>
-<summary>Verified smoke run and teaching use</summary>
+## Reference hardware and reported results
 
-The smoke workflow was executed on 8 September 2026 with Python 3.12.8, TensorFlow 2.16.2, Keras 3.8.0, and an Apple M4 workstation. It completed data preparation, both training paths, FP32/DRQ/INT8 conversion, 50% pruning, fused inference, and trade-off generation.
+The following values are reported reference measurements, not outputs reproduced by `make smoke`. They use the report's EfficientNet-B0 deployment; the default reproducible workflow above uses MobileNetV2.
 
-| Variant | Model bytes | Synthetic Top-1 | End-to-end median |
-|---|---:|---:|---:|
-| FP32 | 2,761,512 | 50% | 0.263 ms |
-| DRQ | 870,752 | 50% | 0.237 ms |
-| Full INT8 | 973,752 | 50% | 0.192 ms |
-| Pruned 50% + DRQ | 862,096 | 50% | 0.230 ms |
+### Raspberry Pi configuration
 
-These are four-image workstation checks, not real-data or Pi results. For a 60–90 minute session, use a 5–10 class subset, compare the four model variants, then justify a deployment choice from measured accuracy, size, latency, memory, and energy.
+| Component | Configuration |
+|---|---|
+| Compute | Raspberry Pi Zero 2 W — quad-core ARM Cortex-A53 at 1.0 GHz, 512 MB RAM; Raspberry Pi OS Lite 64-bit |
+| Camera | Raspberry Pi CSI Sony IMX219, 8 MP |
+| Display | 1.3-inch Waveshare IPS LCD (ST7789) |
+| Location hardware | L76K GPS |
+| Power | PiSugar 3 battery-management board with 1,200 mAh single-cell Li-ion battery |
+| Storage | 32 GB microSD card |
+| Bill of materials | NZ$158, excluding the custom enclosure and buttons |
 
-</details>
+The hardware configuration includes GPS. The current camera command accepts fixed `--latitude` and `--longitude`; live GPS acquisition is not implemented in this repository.
 
-Run the core tests with `make test`.
+### Validation accuracy
+
+| EfficientNet-B0 variant | Vision Top-1 | Geo-fused Top-1 (log-linear, α = 0.3) |
+|---|---:|---:|
+| FP32 | 73.77% | 83.26% |
+| DRQ | 70.84% | 81.33% |
+
+### Pi Zero 2 W deployment
+
+| Variant, 4 threads | Model size | Mean latency | Throughput | Energy / inference | Throughput / W | Battery life |
+|---|---:|---:|---:|---:|---:|---:|
+| FP32 | 64.07 MB | 753.08 ms | 1.33 FPS | 1,127.8 mJ | 0.89 FPS/W | 4.68 h |
+| DRQ | 16.15 MB | 461.50 ms | 2.17 FPS | 691.2 mJ | 1.45 FPS/W | 4.55 h |
+
+Latency, throughput, and energy use four inference threads and a net device power of 1.5 W. Battery life uses a 30-second capture–infer–display cycle.
+
+## Verification
+
+Run the full generated-data check with `make smoke`, and the unit tests with `make test`.

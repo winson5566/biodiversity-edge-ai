@@ -1,4 +1,4 @@
-"""Prepare a deterministic teaching dataset from iNaturalist-style JSON metadata."""
+"""Prepare a deterministic dataset from iNaturalist-style JSON metadata."""
 
 from __future__ import annotations
 

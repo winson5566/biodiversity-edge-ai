@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "biodiversity-edge-ai"
 version = "0.1.0"
-description = "Integrated vision, geo-prior, optimization, and Raspberry Pi biodiversity recognition"
+description = "Vision, geo-prior, TFLite, and Raspberry Pi biodiversity recognition"
 readme = "README.md"
 requires-python = ">=3.10,<3.13"
 dependencies = [

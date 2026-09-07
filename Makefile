@@ -28,7 +28,6 @@ HEAD_EPOCHS ?= 3
 FINETUNE_EPOCHS ?= 5
 GEO_EPOCHS ?= 30
 GEO_EMBEDDING_DIM ?= 256
-PRUNE_FINETUNE_EPOCHS ?= 3
 REPRESENTATIVE_LIMIT ?= 200
 BENCHMARK_WARMUP ?= 10
 BENCHMARK_REPETITIONS ?= 5
@@ -39,18 +38,15 @@ VISION_FP32 := $(MODEL_DIR)/vision_fp32.tflite
 VISION_DRQ := $(MODEL_DIR)/vision_drq.tflite
 VISION_INT8 := $(MODEL_DIR)/vision_int8.tflite
 GEO_FP32 := $(MODEL_DIR)/geo_prior_fp32.tflite
-PRUNED_KERAS := $(MODEL_DIR)/vision_pruned_50.keras
-PRUNED_DRQ := $(MODEL_DIR)/vision_pruned_50_drq.tflite
 
-.PHONY: help setup prepare train export optimize workstation benchmark test smoke
+.PHONY: help setup prepare train export workstation benchmark test smoke
 
 help:
 	@echo "make setup       Install training and test dependencies"
 	@echo "make prepare     Build deterministic image and metadata splits"
 	@echo "make train       Train vision and Geo Prior Keras models"
 	@echo "make export      Export FP32, DRQ, full INT8, and Geo TFLite models"
-	@echo "make optimize    Create and export the 50% pruned model"
-	@echo "make workstation Run prepare, train, export, optimize, and local benchmark"
+	@echo "make workstation Run prepare, train, export, and local benchmark"
 	@echo "make benchmark   Benchmark and summarize all deployment variants"
 	@echo "make smoke       Run the entire pipeline on tiny generated data"
 	@echo "Default training: Mini source, 10000 classes, no per-class image cap"
@@ -119,26 +115,10 @@ $(GEO_FP32): $(GEO_KERAS)
 		--class-map $(DATASET)/class_map.json --model-id geo_prior_fp32 \
 		--role geo_prior --optimization fp32 --input-scale encoded_geo
 
-optimize: $(PRUNED_DRQ)
-
-$(PRUNED_KERAS): $(VISION_KERAS)
-	PYTHONPATH=$(PYTHONPATH) $(PYTHON) scripts/prune_vision.py \
-		--keras-model $< --output $@ --sparsity 0.50 \
-		--data-dir $(DATASET) --input-size $(INPUT_SIZE) \
-		--input-scale minus1_1 --batch-size $(BATCH_SIZE) \
-		--finetune-epochs $(PRUNE_FINETUNE_EPOCHS)
-
-$(PRUNED_DRQ): $(PRUNED_KERAS)
-	PYTHONPATH=$(PYTHONPATH) $(PYTHON) scripts/export_tflite.py \
-		--keras-model $< --output $@ --manifest $@.manifest.json \
-		--class-map $(DATASET)/class_map.json --model-id vision_pruned_50_drq \
-		--role vision --optimization drq --input-scale minus1_1
-
 BENCHMARK_RESULTS := \
 	$(RESULT_DIR)/fused_fp32.json \
 	$(RESULT_DIR)/fused_drq.json \
-	$(RESULT_DIR)/fused_int8.json \
-	$(RESULT_DIR)/fused_pruned_50_drq.json
+	$(RESULT_DIR)/fused_int8.json
 
 benchmark: $(RESULT_DIR)/tradeoffs.md
 
@@ -166,20 +146,12 @@ $(RESULT_DIR)/fused_int8.json: $(VISION_INT8) $(GEO_FP32)
 		--class-map $(DATASET)/class_map.json --alpha 0.3 \
 		--warmup $(BENCHMARK_WARMUP) --repetitions $(BENCHMARK_REPETITIONS) --output $@
 
-$(RESULT_DIR)/fused_pruned_50_drq.json: $(PRUNED_DRQ) $(GEO_FP32)
-	PYTHONPATH=$(PYTHONPATH) $(PYTHON) scripts/benchmark_rpi.py \
-		--images $(DATASET)/images/test --metadata-csv $(DATASET)/metadata/test.csv \
-		--vision-model $(PRUNED_DRQ) --vision-manifest $(PRUNED_DRQ).manifest.json \
-		--geo-model $(GEO_FP32) --geo-manifest $(GEO_FP32).manifest.json \
-		--class-map $(DATASET)/class_map.json --alpha 0.3 \
-		--warmup $(BENCHMARK_WARMUP) --repetitions $(BENCHMARK_REPETITIONS) --output $@
-
 $(RESULT_DIR)/tradeoffs.md: $(BENCHMARK_RESULTS)
 	PYTHONPATH=$(PYTHONPATH) $(PYTHON) scripts/summarize_benchmarks.py \
 		$(BENCHMARK_RESULTS) \
 		--csv $(RESULT_DIR)/tradeoffs.csv --markdown $@
 
-workstation: prepare train export optimize benchmark
+workstation: prepare train export benchmark
 
 test:
 	PYTHONPATH=$(PYTHONPATH) $(PYTHON) -m unittest discover -s tests -v
@@ -195,5 +167,5 @@ smoke: data/smoke_source/annotations.json
 		MODEL_DIR=artifacts/smoke/models RESULT_DIR=artifacts/smoke/results \
 		NUM_CLASSES=2 MIN_PER_CLASS=3 MAX_PER_CLASS=12 INPUT_SIZE=32 VISION_WEIGHTS=none \
 		BATCH_SIZE=4 HEAD_EPOCHS=1 FINETUNE_EPOCHS=1 \
-		GEO_EPOCHS=1 GEO_EMBEDDING_DIM=16 PRUNE_FINETUNE_EPOCHS=1 \
+		GEO_EPOCHS=1 GEO_EMBEDDING_DIM=16 \
 		REPRESENTATIVE_LIMIT=8 BENCHMARK_WARMUP=1 BENCHMARK_REPETITIONS=1

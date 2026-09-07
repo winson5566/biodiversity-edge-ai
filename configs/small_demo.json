@@ -20,11 +20,7 @@
   "optimizations": [
     "fp32",
     "drq",
-    "full_int8",
-    "pruning_30",
-    "pruning_50",
-    "pruning_70",
-    "pruning_50_plus_int8"
+    "full_int8"
   ],
   "note": "Measure every exported variant under the same evaluation conditions."
 }
