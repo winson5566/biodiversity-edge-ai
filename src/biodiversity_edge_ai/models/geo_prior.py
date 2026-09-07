@@ -1,4 +1,4 @@
-"""Canonical inference model for the legacy six-feature geo prior."""
+"""Canonical inference model for the six-feature Geo Prior."""
 
 from __future__ import annotations
 
@@ -21,7 +21,7 @@ def build_geo_prior_model(
     residual_blocks: int = 4,
     dropout: float = 0.5,
 ) -> Any:
-    """Build the FCNet described in the original project report."""
+    """Build the residual FCNet used for spatio-temporal prediction."""
     tf = _tensorflow()
     inputs = tf.keras.Input(shape=(input_features,), dtype=tf.float32, name="geo_features")
     x = tf.keras.layers.Dense(embedding_dim, name="geo_projection")(inputs)

@@ -8,11 +8,11 @@ from biodiversity_edge_ai.metadata import encode_geo_features, year_fraction
 
 
 class MetadataTests(unittest.TestCase):
-    def test_legacy_year_fraction_is_one_based(self):
+    def test_year_fraction_is_one_based(self):
         self.assertAlmostEqual(year_fraction(dt.date(2025, 1, 1)), 1 / 365)
         self.assertAlmostEqual(year_fraction("2024-12-31 00:00:00+00:00"), 1.0)
 
-    def test_feature_order_matches_legacy_project(self):
+    def test_feature_order_is_stable(self):
         encoded = encode_geo_features(0.0, 180.0, "2025-01-01")
         self.assertEqual(encoded.dtype, np.float32)
         self.assertEqual(encoded.shape, (6,))

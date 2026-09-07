@@ -1,6 +1,6 @@
 # Embedded machine learning classroom demo
 
-This case study turns the original biodiversity system into one computer-vision-centred embedded ML workflow. It can be taught as a 60--90 minute lecture plus a practical lab.
+This case study presents one computer-vision-centred embedded ML workflow. It can be taught as a 60--90 minute lecture plus a practical lab.
 
 ## Learning outcomes
 
@@ -16,7 +16,7 @@ Students should be able to:
 
 ### 1. Problem and constraints (10 minutes)
 
-Start with offline species recognition on a Raspberry Pi Zero 2 W. Show why a server-only solution is unsuitable when connectivity, response time, privacy, and power matter. Introduce the 10,000-class iNaturalist system as the original project and a smaller class subset as the classroom dataset.
+Start with offline species recognition on a Raspberry Pi Zero 2 W. Show why a server-only solution is unsuitable when connectivity, response time, privacy, and power matter. Contrast a large 10,000-class configuration with the smaller subset used for a live demonstration.
 
 ### 2. Vision baseline (15 minutes)
 
@@ -37,16 +37,13 @@ P(class | image, geo) proportional to
 P(class | image)^alpha * P(class | geo)^(1-alpha)
 ```
 
-Use validation data to choose `alpha`; evaluate that choice once on the test set. Demonstrate the vision-only fallback by removing location metadata. Point out that live GPS was not completed in the original device program: fixed coordinates are enough to teach the model and fusion path without claiming otherwise.
+Use validation data to choose `alpha`; evaluate that choice once on the test set. Demonstrate the vision-only fallback by removing location metadata. Fixed coordinates are sufficient for the model and fusion path; live GPS can be added as a separate hardware exercise.
 
 ### 4. Quantization and pruning (20 minutes)
 
 Export the same baseline as FP32, DRQ, and full INT8. Then create new 30%, 50%, and 70% magnitude-pruned variants and optionally combine pruning with INT8.
 
-Keep the provenance explicit:
-
-- FP32, DRQ, Geo Prior fusion, and Pi deployment belong to the original project.
-- Full-integer activation quantization and pruning are new teaching extensions.
+Treat every exported variant as a separate experiment and record its configuration in the model manifest.
 
 Ask students to predict the outcome before measuring it. In particular, zeros in a dense tensor do not guarantee reduced TFLite size or latency.
 
@@ -75,8 +72,8 @@ Each student group submits:
 3. raw JSON benchmark outputs from the Pi;
 4. one completed trade-off table;
 5. a short recommendation supported by device measurements;
-6. a statement separating reproduced original results from newly generated extension results.
+6. a statement separating measured results from estimates or expected behavior.
 
 ## Recommended live-demo path
 
-Use a 5--10 class image subset and a 128x128 MobileNetV2 for training during class. Bring pre-exported 10,000-class legacy models to demonstrate the scale of the original project. Run the expensive full-dataset results as reported evidence, not as a live reproduction.
+Use a 5--10 class image subset and a 128x128 MobileNetV2 for training during class. A pre-exported large-class model can demonstrate scale when full-dataset training is not practical during the session.

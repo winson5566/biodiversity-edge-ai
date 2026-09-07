@@ -1,4 +1,4 @@
-"""Small adapter around the legacy Waveshare ST7789 display driver."""
+"""Small adapter around the Waveshare ST7789 display driver."""
 
 from __future__ import annotations
 

@@ -27,10 +27,10 @@ The smoke source contains two synthetic classes with twelve 40x40 images per cla
 
 | Model | Optimization | Input | Size | Test Top-1 | End-to-end median |
 |---|---|---|---:|---:|---:|
-| vision_fp32 | FP32 | float32 | 2,761,512 bytes | 50% | 0.208 ms |
-| vision_drq | DRQ | float32 | 870,752 bytes | 50% | 0.202 ms |
-| vision_int8 | full INT8 | int8 | 973,752 bytes | 50% | 0.173 ms |
-| vision_pruned_50_drq | pruning + DRQ | float32 | 862,096 bytes | 50% | 0.265 ms |
+| vision_fp32 | FP32 | float32 | 2,761,512 bytes | 50% | 0.263 ms |
+| vision_drq | DRQ | float32 | 870,752 bytes | 50% | 0.237 ms |
+| vision_int8 | full INT8 | int8 | 973,752 bytes | 50% | 0.192 ms |
+| vision_pruned_50_drq | pruning + DRQ | float32 | 862,096 bytes | 50% | 0.230 ms |
 
 The common Geo Prior artifact was 15,392 bytes. These timings come from a four-image workstation run with one warm-up and one repetition; use the Raspberry Pi benchmark settings for deployment conclusions.
 

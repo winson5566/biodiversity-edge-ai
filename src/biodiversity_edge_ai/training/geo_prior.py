@@ -1,4 +1,4 @@
-"""Train the six-feature presence-only geo-prior used by the original project."""
+"""Train the six-feature presence-only Geo Prior."""
 
 from __future__ import annotations
 

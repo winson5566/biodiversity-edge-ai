@@ -1,10 +1,10 @@
 {
-  "scope": "embedded ML teaching extension",
+  "scope": "small reproducible demonstration",
   "dataset": {
     "classes": 10,
     "input_size": 128,
     "split": "fixed train/val/test",
-    "class_map": "data/class_maps/teaching_classes.json"
+    "class_map": "data/prepared/class_map.json"
   },
   "vision": {
     "backbone": "mobilenet-v2",
@@ -26,5 +26,5 @@
     "pruning_70",
     "pruning_50_plus_int8"
   ],
-  "note": "Pruning is a new teaching extension and was not evaluated in the original project."
+  "note": "Measure every exported variant under the same evaluation conditions."
 }

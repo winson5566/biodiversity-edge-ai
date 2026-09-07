@@ -6,10 +6,5 @@ __pycache__/
 dist/
 build/
 *.egg-info/
-artifacts/models/*
-artifacts/results/*
-artifacts/figures/*
-!artifacts/**/.gitkeep
+artifacts/
 /data/
-artifacts/legacy/
-artifacts/smoke/

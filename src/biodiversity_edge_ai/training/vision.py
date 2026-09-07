@@ -1,4 +1,4 @@
-"""Teaching-scale transfer learning for a directory-based image dataset."""
+"""Transfer learning for a directory-based image dataset."""
 
 from __future__ import annotations
 

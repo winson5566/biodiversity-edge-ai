@@ -25,7 +25,7 @@ def build_vision_model(
     """Build the architecture used by both training and TFLite export.
 
     Inputs are float tensors. Input scaling remains external and is recorded in
-    the model manifest so that legacy checkpoints can be migrated faithfully.
+    the model manifest so that training and inference remain consistent.
     """
     tf = _tensorflow()
     key = backbone.lower().replace("_", "-")

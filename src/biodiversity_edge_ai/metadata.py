@@ -19,7 +19,7 @@ def parse_observation_date(value: str | dt.date | dt.datetime) -> dt.date:
     candidate = value.strip()
     if not candidate:
         raise ValueError("observation date cannot be empty")
-    # Covers the legacy `%Y-%m-%d %H:%M:%S+00:00` data and ISO 8601 values.
+    # Covers `%Y-%m-%d %H:%M:%S+00:00` data and ISO 8601 values.
     normalized = candidate.replace("Z", "+00:00")
     try:
         return dt.datetime.fromisoformat(normalized).date()
@@ -33,7 +33,7 @@ def parse_observation_date(value: str | dt.date | dt.datetime) -> dt.date:
 def year_fraction(value: str | dt.date | dt.datetime) -> float:
     """Return the 1-based day of year divided by the number of days in that year.
 
-    This intentionally matches the encoding in the legacy geo-prior project.
+    The feature order is part of the model interface and must remain stable.
     """
     date = parse_observation_date(value)
     days = 366 if calendar.isleap(date.year) else 365

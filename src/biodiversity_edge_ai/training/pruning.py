@@ -1,4 +1,4 @@
-"""Magnitude pruning added as a teaching extension; it was not in the original work."""
+"""Magnitude-pruning utilities for vision model optimization."""
 
 from __future__ import annotations
 

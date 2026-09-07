@@ -1,14 +1,8 @@
 # Biodiversity Edge AI
 
-This repository consolidates three legacy biodiversity projects into one reproducible embedded machine learning teaching example:
+Biodiversity Edge AI is an end-to-end embedded machine learning system for offline species recognition. It includes image classification, a spatio-temporal prior, model optimization, multimodal fusion, and Raspberry Pi deployment in one Python package.
 
-- vision training and TFLite export from `inat2021ufam-master`;
-- the spatio-temporal FCNet from `geo_prior_tf-master`;
-- Raspberry Pi camera inference and benchmarking from `AI_Camera-main`.
-
-Use Python 3.10--3.12. Python 3.12 is recommended for the workstation training environment.
-
-The original research contribution covered CNN training, dynamic-range quantization (DRQ), geo-prior fusion, and Raspberry Pi deployment. Pruning is a **new teaching extension**, not an original thesis result. See [docs/RESULTS_PROVENANCE.md](docs/RESULTS_PROVENANCE.md).
+Use Python 3.10--3.12. Python 3.12 is recommended for workstation training.
 
 ## System
 
@@ -20,22 +14,31 @@ lat/lon/date -> geo_prior.tflite -> P(species | geo) -+
 
 If location is unavailable, inference falls back to the vision prediction. Both models must use the same class-map hash; the application refuses to fuse incompatible artifacts.
 
-## Quick start for the dependency-light core
+## Quick start
 
-```bash
-PYTHONPATH=src python -m unittest discover -s tests -v
-PYTHONPATH=src python -m biodiversity_edge_ai.device.predict --help
-```
-
-For model training and export:
+Install the training and development dependencies:
 
 ```bash
 python -m pip install -e '.[train,dev]'
 ```
 
-## Prepare the data
+Run the unit tests:
 
-The deterministic preparation command reads the source annotation JSON once and generates image splits, a contiguous class map, Geo Prior CSV files, device benchmark metadata, and a provenance manifest:
+```bash
+PYTHONPATH=src python -m unittest discover -s tests -v
+```
+
+Before downloading the full dataset, verify the complete pipeline with generated data:
+
+```bash
+make smoke
+```
+
+This creates a two-class dataset, trains the vision and Geo Prior models, exports FP32/DRQ/INT8 TFLite variants, prunes the vision model, benchmarks every variant, and builds a trade-off table. The recorded reference run is in [docs/SMOKE_TEST.md](docs/SMOKE_TEST.md).
+
+## Prepare a dataset
+
+The preparation command reads iNaturalist-format annotations and produces fixed image splits, a contiguous class map, Geo Prior CSV files, calibration inputs, benchmark metadata, and a dataset manifest:
 
 ```bash
 PYTHONPATH=src python scripts/prepare_data.py \
@@ -46,71 +49,53 @@ PYTHONPATH=src python scripts/prepare_data.py \
   --val-fraction 0.15 --test-fraction 0.15 --seed 42
 ```
 
-Download, checksum, output layout, training, export, and evaluation commands are documented end to end in [docs/DATA_FORMATS.md](docs/DATA_FORMATS.md).
+Dataset download, checksum verification, required fields, output layout, and validation commands are documented in [docs/DATA_FORMATS.md](docs/DATA_FORMATS.md).
 
-After setting `RAW_JSON` and `IMAGES_ROOT`, the complete practical-scale workstation flow can also be run through the provided Makefile:
+## Run the end-to-end workflow
 
-```bash
-make setup
-make workstation RAW_JSON=/path/to/train_mini.json IMAGES_ROOT=/path/to/extracted/data
-```
-
-Before downloading the real dataset, verify the entire software path with tiny generated data:
+After setting the annotation and image paths, run:
 
 ```bash
-make smoke
+make workstation \
+  RAW_JSON=/path/to/train_mini.json \
+  IMAGES_ROOT=/path/to/extracted/data
 ```
 
-The recorded stages and example outputs are in [docs/SMOKE_TEST.md](docs/SMOKE_TEST.md).
+The workflow:
 
-On Raspberry Pi, install the platform-provided `picamera2`, GPIO, and SPI packages, then install this project with the lightweight runtime. TensorFlow Lite Runtime may be installed separately when it is available for the Pi OS/Python combination.
+1. creates a deterministic class map and train/validation/test split;
+2. trains the vision classifier and Geo Prior;
+3. exports FP32, dynamic-range quantized, and full-INT8 models;
+4. fine-tunes and exports a 50% magnitude-pruned vision model;
+5. benchmarks the same held-out images for every variant;
+6. generates CSV and Markdown performance trade-off tables.
 
-## Reproducible workflow
+Individual stages are available as `make prepare`, `make train`, `make export`, `make optimize`, and `make benchmark`. See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for the package structure and model-compatibility rules.
 
-1. Create a class map and fixed train/validation/test split.
-2. Train a vision backbone with `scripts/train_vision.py`.
-3. Train the geo-prior with `scripts/train_geo_prior.py`.
-4. Export both models and manifests with `scripts/export_tflite.py`.
-5. Tune the fusion weight on validation data only.
-6. Evaluate the selected weight once on the held-out test set.
-7. Run `scripts/benchmark_rpi.py` on the target Raspberry Pi.
-8. Add the pruning extension only after the original baseline is reproduced.
+## Run inference
 
-The legacy repositories remain unchanged. Their roles and known incompatibilities are documented in [docs/INTEGRATION.md](docs/INTEGRATION.md).
-The suggested 60--90 minute teaching sequence and practical deliverables are in [docs/LECTURE_DEMO.md](docs/LECTURE_DEMO.md).
-
-## Link the existing artifacts
-
-The migration command creates a normalized class map and links existing TFLite/checkpoint files into the ignored `artifacts/legacy` directory:
-
-```bash
-PYTHONPATH=src python scripts/migrate_legacy.py \
-  --vision-repo /path/to/inat2021ufam-master \
-  --geo-repo /path/to/geo_prior_tf-master \
-  --device-repo /path/to/AI_Camera-main
-```
-
-Add `--copy` when preparing a self-contained transfer to Raspberry Pi. Linking is the default so the same 186 MB of legacy TFLite files is not duplicated during cleanup.
-
-## Run an existing vision model
-
-After migration, the existing CNN artifacts can be used in vision-only mode. This path does not require a Geo Prior model:
+Vision-only prediction:
 
 ```bash
 PYTHONPATH=src python scripts/predict.py \
   --image /path/to/photo.jpg \
-  --vision-model artifacts/legacy/vision_models/model_efficientnet_b0_inat2021_drq.tflite \
-  --vision-manifest artifacts/legacy/vision_models/model_efficientnet_b0_inat2021_drq.manifest.json \
-  --class-map artifacts/legacy/class_maps/inat2021_10000.json
+  --vision-model artifacts/models/vision_drq.tflite \
+  --vision-manifest artifacts/models/vision_drq.tflite.manifest.json \
+  --class-map data/prepared/class_map.json
 ```
 
-To enable fusion, first convert the legacy Geo Prior checkpoint as described in
-[docs/INTEGRATION.md](docs/INTEGRATION.md), export it to TFLite, and add
-`--geo-model`, `--geo-manifest`, `--latitude`, `--longitude`, and `--date`.
+Add `--geo-model`, `--geo-manifest`, `--latitude`, `--longitude`, and `--date` to enable spatio-temporal fusion.
 
-## Pruning extension experiment
+## Quantization, pruning, and trade-offs
 
-This command creates a new magnitude-pruned Keras artifact. It is a classroom extension and must not be presented as work completed in the original report:
+The standard workflow produces four vision deployment variants:
+
+- FP32 baseline;
+- dynamic-range quantization (DRQ);
+- full-integer INT8 quantization;
+- 50% magnitude pruning followed by DRQ.
+
+The pruning target can be changed when running its script directly:
 
 ```bash
 PYTHONPATH=src python scripts/prune_vision.py \
@@ -121,27 +106,35 @@ PYTHONPATH=src python scripts/prune_vision.py \
   --finetune-epochs 3
 ```
 
-Export the baseline and pruned models with the same TFLite mode, then compare accuracy, file size, and Raspberry Pi latency. Sparse weights alone do not guarantee a smaller or faster TFLite model.
+Compare accuracy, file size, invoke latency, end-to-end latency, memory, and energy on the target device. Sparse weights alone do not guarantee a smaller or faster TFLite model; the measured trade-off determines the deployment choice. The evaluation template is in [docs/PERFORMANCE_EVALUATION.md](docs/PERFORMANCE_EVALUATION.md).
 
-## Raspberry Pi measurement
+## Raspberry Pi deployment
 
-Use a self-contained artifact directory on the Pi, then measure the same image set for every model variant:
+Install the platform-provided `picamera2`, GPIO, and SPI packages, then install this project with the lightweight runtime dependencies. Install TensorFlow Lite Runtime separately when it is available for the selected Pi OS and Python version.
+
+Benchmark a model on the Pi:
 
 ```bash
 PYTHONPATH=src python scripts/benchmark_rpi.py \
-  --images data/test \
-  --vision-model artifacts/models/vision.tflite \
-  --vision-manifest artifacts/models/vision.manifest.json \
-  --class-map artifacts/class_map.json \
+  --images data/prepared/images/test \
+  --metadata-csv data/prepared/metadata/test.csv \
+  --vision-model artifacts/models/vision_drq.tflite \
+  --vision-manifest artifacts/models/vision_drq.tflite.manifest.json \
+  --geo-model artifacts/models/geo_prior_fp32.tflite \
+  --geo-manifest artifacts/models/geo_prior_fp32.tflite.manifest.json \
+  --class-map data/prepared/class_map.json \
   --warmup 10 --repetitions 5 \
-  --output results/pi_benchmark.json
+  --output artifacts/results/pi_benchmark.json
 ```
 
-For camera capture, run `scripts/rpi_camera.py` with the same model arguments. Fixed latitude and longitude are supported; live GPS ingestion is intentionally left as a separate hardware task.
+For live camera capture, use `scripts/rpi_camera.py` with the same model arguments. Fixed coordinates are supported; when coordinates are omitted, the application runs vision-only inference.
 
-## Current verification boundary
+## Project guides
 
-- Unit tests, Python byte-code compilation, command-line parsing, and wheel packaging pass in the current workspace.
-- The original repositories were not modified; their existing artifacts are linked under ignored `artifacts/legacy` paths.
-- TensorFlow/TFLite Runtime is not installed in this workspace, so model conversion and real inference must be run in the training environment or on the Pi.
-- Raspberry Pi camera, display, latency, power, and live GPS behavior still require validation on the physical device.
+- [Data preparation and formats](docs/DATA_FORMATS.md)
+- [Architecture and interfaces](docs/ARCHITECTURE.md)
+- [Performance evaluation](docs/PERFORMANCE_EVALUATION.md)
+- [Small-data full-pipeline test](docs/SMOKE_TEST.md)
+- [Lecture and practical sequence](docs/LECTURE_DEMO.md)
+
+Hardware latency, memory, power, camera, display, and GPS behavior must be measured on the target Raspberry Pi; workstation results are not a substitute for device measurements.

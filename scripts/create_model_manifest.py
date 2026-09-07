@@ -1,4 +1,4 @@
-"""Inspect an existing TFLite artifact and create its compatibility manifest."""
+"""Inspect a TFLite artifact and create its compatibility manifest."""
 
 from __future__ import annotations
 
@@ -21,6 +21,7 @@ def main() -> None:
     parser.add_argument("--role", choices=("vision", "geo_prior"), required=True)
     parser.add_argument("--input-scale", required=True)
     parser.add_argument("--optimization", required=True)
+    parser.add_argument("--source", default="external TFLite artifact")
     args = parser.parse_args()
     runner = TFLiteRunner(args.model)
     shape = [int(value) for value in runner.input_details["shape"][1:]]
@@ -35,7 +36,7 @@ def main() -> None:
         input_dtype=np.dtype(runner.input_details["dtype"]).name,
         input_scale=args.input_scale,
         optimization=args.optimization,
-        source="original project artifact",
+        source=args.source,
     )
     manifest.save(args.output)
     print(Path(args.output))
