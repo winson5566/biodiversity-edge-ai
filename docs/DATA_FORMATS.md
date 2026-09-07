@@ -18,8 +18,10 @@ Run all following workstation commands from the repository root with this enviro
 After the raw data is available, the complete sequence below is also automated by:
 
 ```bash
-make workstation RAW_JSON=/path/to/train_mini.json IMAGES_ROOT=/path/to/extracted/data
+make workstation
 ```
+
+The default source is Train Mini, with 10,000 classes and no per-class image cap. Use `DATA_SOURCE=full` for full Train, or override `RAW_JSON` and `IMAGES_ROOT` for custom paths.
 
 Use the individual `make prepare`, `make train`, `make export`, `make optimize`, and `make benchmark` targets when teaching or diagnosing one stage at a time. Run `make help` to see the available overrides.
 
@@ -27,7 +29,18 @@ Use the individual `make prepare`, `make train`, `make export`, `make optimize`,
 
 Read and accept the dataset terms on the [official iNaturalist 2021 page](https://github.com/visipedia/inat_comp/tree/master/2021) before downloading. The images are for non-commercial research and educational use and must not be redistributed.
 
-For the practical example, use the 500,000-image mini training set rather than the 224 GB full training set:
+Train Mini is the default source. It contains 500,000 images across 10,000 classes. Full Train is an optional larger source; both use the same annotation schema and preparation pipeline.
+
+| Source | Archive | Download size | MD5 |
+|---|---|---:|---|
+| Mini (default) | [Images](https://ml-inat-competition-datasets.s3.amazonaws.com/2021/train_mini.tar.gz) | 42 GB | `db6ed8330e634445efc8fec83ae81442` |
+| Mini (default) | [Annotations](https://ml-inat-competition-datasets.s3.amazonaws.com/2021/train_mini.json.tar.gz) | 45 MB | `395a35be3651d86dc3b0d365b8ea5f92` |
+| Full | [Images](https://ml-inat-competition-datasets.s3.amazonaws.com/2021/train.tar.gz) | 224 GB | `e0526d53c7f7b2e3167b2b43bb2690ed` |
+| Full | [Annotations](https://ml-inat-competition-datasets.s3.amazonaws.com/2021/train.json.tar.gz) | 221 MB | `38a7bb733f7a09214d44293460ec0021` |
+
+Images are JPEG files with a maximum dimension of 500 pixels. Keep free space for both the compressed archives and extracted images. Selecting fewer classes reduces the prepared working set after extraction; it does not reduce the archive download size.
+
+### Download Mini (default)
 
 ```bash
 mkdir -p raw/inat2021
@@ -36,43 +49,93 @@ cd raw/inat2021
 curl -C - -O https://ml-inat-competition-datasets.s3.amazonaws.com/2021/train_mini.tar.gz
 curl -C - -O https://ml-inat-competition-datasets.s3.amazonaws.com/2021/train_mini.json.tar.gz
 
-tar -xzf train_mini.tar.gz
-tar -xzf train_mini.json.tar.gz
 cd ../..
 ```
 
-The mini image archive is still about 42 GB. `--num-classes` reduces the prepared working set after extraction; it does not make the official archive download smaller.
+### Download full Train (optional)
 
-Official MD5 values:
+```bash
+mkdir -p raw/inat2021
+cd raw/inat2021
 
-```text
-train_mini.tar.gz       db6ed8330e634445efc8fec83ae81442
-train_mini.json.tar.gz  395a35be3651d86dc3b0d365b8ea5f92
+curl -C - -O https://ml-inat-competition-datasets.s3.amazonaws.com/2021/train.tar.gz
+curl -C - -O https://ml-inat-competition-datasets.s3.amazonaws.com/2021/train.json.tar.gz
+
+cd ../..
 ```
 
-Linux users can verify them with `md5sum`; macOS users can run `md5 filename`. The extracted directory must be kept at the same level as `train_mini.json`. The JSON `file_name` value is joined to `--images-root`, so no filename rewriting is required.
+### Verify and extract
+
+Verify the downloaded pair against the MD5 table before extracting. For Mini, run:
+
+```bash
+# Linux
+md5sum raw/inat2021/train_mini.tar.gz raw/inat2021/train_mini.json.tar.gz
+# macOS
+md5 raw/inat2021/train_mini.tar.gz raw/inat2021/train_mini.json.tar.gz
+```
+
+For full Train, use `train.tar.gz` and `train.json.tar.gz` in those commands. If a checksum differs, re-download that archive before continuing.
+
+Extract the chosen pair:
+
+```bash
+# Mini
+tar -xzf raw/inat2021/train_mini.tar.gz -C raw/inat2021
+tar -xzf raw/inat2021/train_mini.json.tar.gz -C raw/inat2021
+
+# Full Train (only if downloaded)
+tar -xzf raw/inat2021/train.tar.gz -C raw/inat2021
+tar -xzf raw/inat2021/train.json.tar.gz -C raw/inat2021
+```
+
+The resulting layout is:
+
+```text
+raw/inat2021/
+  train_mini.json
+  train_mini/category/image.jpg
+  train.json                       # optional full source
+  train/category/image.jpg         # optional full source
+```
+
+Use `raw/inat2021` as `--images-root` for either source. Annotation `file_name` values already include `train_mini/` or `train/`; pointing the root at either of those subdirectories would duplicate the prefix.
 
 For a very small trial, the same preparation code also accepts any COCO-style JSON containing `images`, `annotations`, and `categories`, provided each `images[].file_name` points to a local image below `--images-root`.
 
-## 2. Create a deterministic subset
+## 2. Prepare the selected source
 
-From the repository root:
+Default Mini preparation, retaining all usable images in all 10,000 classes:
 
 ```bash
 PYTHONPATH=src python scripts/prepare_data.py \
   --annotations raw/inat2021/train_mini.json \
   --images-root raw/inat2021 \
   --output data/prepared \
-  --num-classes 10 \
-  --min-per-class 50 \
-  --max-per-class 50 \
+  --num-classes 10000 \
   --val-fraction 0.15 \
   --test-fraction 0.15 \
   --seed 42 \
   --transfer-mode symlink
 ```
 
-`--num-classes 10` selects the ten eligible categories with the most usable images; ties are resolved by source category ID. To teach a chosen set of species, replace it with `--category-ids 3 47 108 ...`. The two selection flags cannot be used together.
+The Makefile equivalent is `make prepare`. Full-source preparation is `make prepare DATA_SOURCE=full`, which reads `raw/inat2021/train.json` and writes `data/prepared_full`.
+
+Neither default applies `--max-per-class`. All usable images are assigned to the generated train, validation, or test split (approximately 70%/15%/15%, rounded per class). These are local splits of the selected training source, not the official validation/test splits. Check `dataset_manifest.json` for exact counts and skipped records.
+
+For a smaller subset, set `NUM_CLASSES=10 MAX_PER_CLASS=50` and use separate dataset, model, and result directories:
+
+```bash
+make workstation NUM_CLASSES=10 MAX_PER_CLASS=50 \
+  DATASET=data/prepared_demo \
+  MODEL_DIR=artifacts/models_demo RESULT_DIR=artifacts/results_demo
+```
+
+`--num-classes 10` selects the ten eligible categories with the most usable images; ties are resolved by source category ID. To select specific species through `prepare_data.py`, replace it with `--category-ids 3 47 108 ...`. The two selection flags cannot be used together. `MIN_PER_CLASS` controls class eligibility separately from the optional `MAX_PER_CLASS` cap; its Makefile default is 20.
+
+Use fresh output directories when changing the source, class selection, or split settings. Make reuses existing artifacts and does not detect a change to command-line variables.
+
+The full-source loader reads the annotation JSON and builds record indexes in memory. Large runs require workstation memory and storage proportional to the source size. Full-dataset training has not been executed in the recorded smoke test.
 
 The default transfer mode is `symlink`, which avoids duplicating the raw images. Use `--transfer-mode copy` for a self-contained archive, or `hardlink` when source and destination are on the same filesystem. The command refuses to write into a non-empty output directory, so an earlier split cannot be silently overwritten.
 
@@ -130,11 +193,13 @@ Train the Geo Prior on the exact same label IDs and report validation accuracy:
 PYTHONPATH=src python scripts/train_geo_prior.py \
   --observations data/prepared/metadata/train.csv \
   --validation-observations data/prepared/metadata/val.csv \
-  --num-classes 10 \
+  --num-classes 10000 \
   --output artifacts/models/geo_prior.keras
 ```
 
 The value of `--num-classes` must equal the number of entries in `class_map.json`.
+
+The individual commands below use the default Mini output paths. For full Train, the complete equivalent is `make workstation DATA_SOURCE=full`; use `data/prepared_full`, `artifacts/models_full`, and `artifacts/results_full` when running those stages individually.
 
 Training, INT8 calibration, desktop inference, and Raspberry Pi inference all use the same centre-crop-then-resize policy and the same declared input scaling. These settings must not be changed for only one stage.
 

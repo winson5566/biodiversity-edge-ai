@@ -1,14 +1,25 @@
 PYTHON ?= python3
 PYTHONPATH := src
 
+DATA_SOURCE ?= mini
+ifeq ($(DATA_SOURCE),mini)
 RAW_JSON ?= raw/inat2021/train_mini.json
+RUN_SUFFIX :=
+else ifeq ($(DATA_SOURCE),full)
+RAW_JSON ?= raw/inat2021/train.json
+RUN_SUFFIX := _full
+else
+$(error DATA_SOURCE must be mini or full)
+endif
 IMAGES_ROOT ?= raw/inat2021
-DATASET ?= data/prepared
-MODEL_DIR ?= artifacts/models
-RESULT_DIR ?= artifacts/results
+DATASET ?= data/prepared$(RUN_SUFFIX)
+MODEL_DIR ?= artifacts/models$(RUN_SUFFIX)
+RESULT_DIR ?= artifacts/results$(RUN_SUFFIX)
 
-NUM_CLASSES ?= 10
-MAX_PER_CLASS ?= 50
+NUM_CLASSES ?= 10000
+MIN_PER_CLASS ?= 20
+# Empty means use every usable image in each selected class.
+MAX_PER_CLASS ?=
 INPUT_SIZE ?= 128
 SEED ?= 42
 VISION_WEIGHTS ?= imagenet
@@ -38,10 +49,13 @@ help:
 	@echo "make prepare     Build deterministic image and metadata splits"
 	@echo "make train       Train vision and Geo Prior Keras models"
 	@echo "make export      Export FP32, DRQ, full INT8, and Geo TFLite models"
-	@echo "make optimize    Create and export the 50% pruning extension"
+	@echo "make optimize    Create and export the 50% pruned model"
 	@echo "make workstation Run prepare, train, export, optimize, and local benchmark"
 	@echo "make benchmark   Benchmark and summarize all deployment variants"
 	@echo "make smoke       Run the entire pipeline on tiny generated data"
+	@echo "Default training: Mini source, 10000 classes, no per-class image cap"
+	@echo "Full source: make workstation DATA_SOURCE=full"
+	@echo "Small subset: make workstation NUM_CLASSES=10 MAX_PER_CLASS=50 DATASET=data/prepared_demo MODEL_DIR=artifacts/models_demo RESULT_DIR=artifacts/results_demo"
 	@echo "Override paths, for example: make prepare RAW_JSON=/data/train_mini.json IMAGES_ROOT=/data"
 
 setup:
@@ -55,8 +69,8 @@ $(DATASET)/dataset_manifest.json:
 		--images-root $(IMAGES_ROOT) \
 		--output $(DATASET) \
 		--num-classes $(NUM_CLASSES) \
-		--min-per-class $(MAX_PER_CLASS) \
-		--max-per-class $(MAX_PER_CLASS) \
+		--min-per-class $(MIN_PER_CLASS) \
+		$(if $(strip $(MAX_PER_CLASS)),--max-per-class $(MAX_PER_CLASS)) \
 		--val-fraction 0.15 --test-fraction 0.15 \
 		--seed $(SEED) --transfer-mode symlink
 
@@ -179,7 +193,7 @@ smoke: data/smoke_source/annotations.json
 		PYTHON=$(PYTHON) RAW_JSON=data/smoke_source/annotations.json \
 		IMAGES_ROOT=data/smoke_source DATASET=data/smoke_prepared \
 		MODEL_DIR=artifacts/smoke/models RESULT_DIR=artifacts/smoke/results \
-		NUM_CLASSES=2 MAX_PER_CLASS=12 INPUT_SIZE=32 VISION_WEIGHTS=none \
+		NUM_CLASSES=2 MIN_PER_CLASS=3 MAX_PER_CLASS=12 INPUT_SIZE=32 VISION_WEIGHTS=none \
 		BATCH_SIZE=4 HEAD_EPOCHS=1 FINETUNE_EPOCHS=1 \
 		GEO_EPOCHS=1 GEO_EMBEDDING_DIM=16 PRUNE_FINETUNE_EPOCHS=1 \
 		REPRESENTATIVE_LIMIT=8 BENCHMARK_WARMUP=1 BENCHMARK_REPETITIONS=1

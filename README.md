@@ -38,6 +38,8 @@ This creates a two-class dataset, trains the vision and Geo Prior models, export
 
 ## Prepare a dataset
 
+Training defaults to the iNaturalist 2021 **Train Mini** dataset: 500,000 images across 10,000 classes (42 GB image archive and 45 MB annotation archive). The full Train dataset is also supported (224 GB images and 221 MB annotations).
+
 The preparation command reads iNaturalist-format annotations and produces fixed image splits, a contiguous class map, Geo Prior CSV files, calibration inputs, benchmark metadata, and a dataset manifest:
 
 ```bash
@@ -45,7 +47,7 @@ PYTHONPATH=src python scripts/prepare_data.py \
   --annotations raw/inat2021/train_mini.json \
   --images-root raw/inat2021 \
   --output data/prepared \
-  --num-classes 10 --max-per-class 50 \
+  --num-classes 10000 \
   --val-fraction 0.15 --test-fraction 0.15 --seed 42
 ```
 
@@ -53,12 +55,26 @@ Dataset download, checksum verification, required fields, output layout, and val
 
 ## Run the end-to-end workflow
 
-After setting the annotation and image paths, run:
+After downloading and extracting Mini into `raw/inat2021`, run:
 
 ```bash
-make workstation \
-  RAW_JSON=/path/to/train_mini.json \
-  IMAGES_ROOT=/path/to/extracted/data
+make workstation
+```
+
+This uses all usable Mini images, with no per-class cap, and creates a fixed train/validation/test split from that source. To use the full Train dataset, extract `train.tar.gz` and `train.json.tar.gz` into the same raw directory and run:
+
+```bash
+make workstation DATA_SOURCE=full
+```
+
+Full-source outputs go to `data/prepared_full`, `artifacts/models_full`, and `artifacts/results_full`. Override `RAW_JSON` and `IMAGES_ROOT` for another raw-data location. Switching to the full source does not require changes to the model code.
+
+For a smaller training run, explicitly select a subset and use separate output directories:
+
+```bash
+make workstation NUM_CLASSES=10 MAX_PER_CLASS=50 \
+  DATASET=data/prepared_demo \
+  MODEL_DIR=artifacts/models_demo RESULT_DIR=artifacts/results_demo
 ```
 
 The workflow:
