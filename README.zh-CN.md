@@ -285,28 +285,61 @@ PYTHONPATH=src python scripts/rpi_camera.py \
 
 ## 系统架构
 
-```text
-Image ─────────────> Vision TFLite ────┐
-                                      ├──> Fusion ──> Species prediction
-Latitude/longitude/date ──> Geo Prior ─┘
+```mermaid
+flowchart LR
+  subgraph WS[工作站：准备、训练、导出]
+    RAW[原始图片、标签、地理元数据] --> PREP[prepare_data.py<br/>固定划分 + 类别映射]
+    PREP --> VTRAIN[视觉模型训练<br/>MobileNetV2]
+    PREP --> GTRAIN[Geo Prior 训练<br/>残差 FCNet]
+    VTRAIN --> OPT[导出与优化<br/>FP32 · DRQ · INT8 · 剪枝]
+    GTRAIN --> GEXP[导出 Geo Prior<br/>TFLite]
+  end
+
+  subgraph BUNDLE[部署包]
+    MAP[class_map.json]
+    VART[vision.tflite + manifest]
+    GART[geo_prior.tflite + manifest]
+  end
+
+  subgraph PI[树莓派：离线推理]
+    IMAGE[相机画面或图片] --> VRUN[视觉 TFLite]
+    GEO[纬度 · 经度 · 日期] --> GRUN[Geo Prior TFLite]
+    VRUN --> CHECK{类别映射和<br/>模型清单一致？}
+    GRUN --> CHECK
+    CHECK --> FUSE[对数线性融合]
+    FUSE --> RESULT[Top-K 物种预测]
+  end
+
+  OPT --> VART
+  GEXP --> GART
+  MAP --> VRUN
+  MAP --> GRUN
+  VART --> VRUN
+  GART --> GRUN
 ```
 
-工作站负责训练和导出，树莓派加载 TFLite 模型。共享清单声明输入形状、缩放、数据类型、优化模式和类别映射哈希，使两个模型的预测类别保持对齐。
+工作站一次性生成部署包；树莓派只加载 TFLite 文件和类别映射。缺少位置或日期时，系统跳过融合，直接返回视觉模型结果。
 
-### 组件与兼容规则
+### 流程阶段
 
-| 能力 | 实现位置 |
+| 阶段 | 运行位置 | 产物 |
+|---|---|---|
+| 准备 | 工作站 | 固定图片划分、元数据 CSV、`class_map.json`、数据集清单 |
+| 训练 | 工作站 | 视觉 Keras 模型和 Geo Prior Keras 模型 |
+| 导出与优化 | 工作站 | 多种 TFLite 模型和 JSON 清单 |
+| 基准测试 | 工作站或树莓派 | 每个模型的 JSON 结果和折中表 |
+| 推理 | 树莓派 | Top-K 物种预测，可选地理融合 |
+
+### 模型产物约定
+
+| 产物 | 必须保持一致的内容 |
 |---|---|
-| 数据准备和类别映射 | `scripts/prepare_data.py`、`pipeline.py` |
-| 视觉模型和训练 | `models/vision.py`、`training/vision.py` |
-| Geo Prior 与元数据编码 | `metadata.py`、`models/geo_prior.py`、`training/geo_prior.py` |
-| TFLite 导出和模型清单 | `export/tflite.py`、`manifest.py` |
-| 量化和剪枝 | `export/tflite.py`、`training/pruning.py` |
-| 融合 | `fusion.py`、`inference.py` |
-| 基准测试 | `evaluation/benchmark.py`、`scripts/summarize_benchmarks.py` |
-| 树莓派相机和屏幕 | `device/rpi_camera.py`、`device/display.py` |
+| 视觉模型与 Geo Prior | 输出维度等于类别映射长度 |
+| 两个模型清单 | 相同的类别映射 SHA-256 哈希 |
+| 每个模型清单 | 输入形状、数据类型、缩放、角色、优化模式 |
+| Geo Prior 输入 | 经度正弦/余弦、纬度正弦/余弦、日期正弦/余弦 |
 
-融合前，程序检查两个模型的输出维度是否等于类别映射长度，以及两个清单中的类别映射 SHA-256 是否一致。清单还记录输入形状、数据类型、缩放方式、角色和优化模式。Geo 特征顺序固定为：经度正弦/余弦、纬度正弦/余弦、日期正弦/余弦。发现不兼容产物时程序会明确报错。
+融合前，程序会拒绝不兼容的部署包，避免物种标签发生静默错位。
 
 ## 验证
 

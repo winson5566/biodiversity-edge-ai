@@ -285,28 +285,61 @@ Add `--display` for the ST7789 display. Geo fusion accepts `--geo-model`, `--geo
 
 ## Architecture
 
-```text
-Image ─────────────> Vision TFLite ────┐
-                                      ├──> Fusion ──> Species prediction
-Latitude/longitude/date ──> Geo Prior ─┘
+```mermaid
+flowchart LR
+  subgraph WS[Workstation: prepare, train, export]
+    RAW[Raw images, labels, geo metadata] --> PREP[prepare_data.py<br/>fixed splits + class map]
+    PREP --> VTRAIN[Vision training<br/>MobileNetV2]
+    PREP --> GTRAIN[Geo Prior training<br/>residual FCNet]
+    VTRAIN --> OPT[Export and optimize<br/>FP32 · DRQ · INT8 · pruning]
+    GTRAIN --> GEXP[Export Geo Prior<br/>TFLite]
+  end
+
+  subgraph BUNDLE[Deployable bundle]
+    MAP[class_map.json]
+    VART[vision.tflite + manifest]
+    GART[geo_prior.tflite + manifest]
+  end
+
+  subgraph PI[Raspberry Pi: offline inference]
+    IMAGE[Camera frame or image] --> VRUN[Vision TFLite]
+    GEO[Latitude · longitude · date] --> GRUN[Geo Prior TFLite]
+    VRUN --> CHECK{Class-map and<br/>manifest match?}
+    GRUN --> CHECK
+    CHECK --> FUSE[Log-linear fusion]
+    FUSE --> RESULT[Top-K species prediction]
+  end
+
+  OPT --> VART
+  GEXP --> GART
+  MAP --> VRUN
+  MAP --> GRUN
+  VART --> VRUN
+  GART --> GRUN
 ```
 
-The workstation trains and exports models; the Pi loads TFLite artifacts. Shared manifests declare input shape, scaling, dtype, optimization, and the class-map hash so that the two prediction vectors remain aligned.
+The workstation creates the model bundle once; the Pi only loads TFLite files and the class map. When location or date is missing, the pipeline returns the vision prediction without fusion.
 
-### Components and compatibility
+### Pipeline stages
 
-| Capability | Implementation |
+| Stage | Runs on | Produces |
+|---|---|---|
+| Prepare | Workstation | Fixed image splits, metadata CSVs, `class_map.json`, dataset manifest |
+| Train | Workstation | Vision Keras model and Geo Prior Keras model |
+| Export and optimize | Workstation | TFLite variants and JSON manifests |
+| Benchmark | Workstation or Pi | Per-model JSON results and trade-off table |
+| Infer | Raspberry Pi | Top-K species predictions, optionally geo-fused |
+
+### Artifact contract
+
+| Artifact | Required agreement |
 |---|---|
-| Dataset preparation and class map | `scripts/prepare_data.py`, `pipeline.py` |
-| Vision model and training | `models/vision.py`, `training/vision.py` |
-| Geo Prior and metadata encoding | `metadata.py`, `models/geo_prior.py`, `training/geo_prior.py` |
-| TFLite export and manifests | `export/tflite.py`, `manifest.py` |
-| Quantization and pruning | `export/tflite.py`, `training/pruning.py` |
-| Fusion | `fusion.py`, `inference.py` |
-| Benchmarking | `evaluation/benchmark.py`, `scripts/summarize_benchmarks.py` |
-| Pi camera and display | `device/rpi_camera.py`, `device/display.py` |
+| Vision and Geo Prior models | Output dimension equals the class-map length |
+| Both manifests | Identical class-map SHA-256 hash |
+| Each manifest | Input shape, dtype, scaling, role, and optimization mode |
+| Geo Prior input | Sine/cosine longitude, sine/cosine latitude, sine/cosine date |
 
-Before fusion, the application checks that both output dimensions match the class-map length and that both manifests have the same class-map SHA-256 value. It also records input shape, dtype, scaling, role, and optimization mode. Geo features have a fixed order: sine/cosine longitude, sine/cosine latitude, and sine/cosine date. An incompatible artifact fails explicitly.
+The application rejects an incompatible bundle before fusion, preventing silently misaligned species labels.
 
 ## Verification
 
