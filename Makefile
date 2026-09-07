@@ -23,6 +23,7 @@ MAX_PER_CLASS ?=
 INPUT_SIZE ?= 128
 SEED ?= 42
 VISION_WEIGHTS ?= imagenet
+VISION_BACKBONE ?= mobilenet-v2
 BATCH_SIZE ?= 32
 HEAD_EPOCHS ?= 3
 FINETUNE_EPOCHS ?= 5
@@ -51,6 +52,7 @@ help:
 	@echo "make smoke       Run the entire pipeline on tiny generated data"
 	@echo "Default training: Mini source, 10000 classes, no per-class image cap"
 	@echo "Full source: make workstation DATA_SOURCE=full"
+	@echo "Backbone: make workstation VISION_BACKBONE=efficientnet-b0"
 	@echo "Small subset: make workstation NUM_CLASSES=10 MAX_PER_CLASS=50 DATASET=data/prepared_demo MODEL_DIR=artifacts/models_demo RESULT_DIR=artifacts/results_demo"
 	@echo "Override paths, for example: make prepare RAW_JSON=/data/train_mini.json IMAGES_ROOT=/data"
 
@@ -75,7 +77,7 @@ train: $(VISION_KERAS) $(GEO_KERAS)
 $(VISION_KERAS): $(DATASET)/dataset_manifest.json
 	PYTHONPATH=$(PYTHONPATH) $(PYTHON) scripts/train_vision.py \
 		--data-dir $(DATASET) --output $@ --class-map $(DATASET)/class_map.json \
-		--backbone mobilenet-v2 --input-size $(INPUT_SIZE) --input-scale minus1_1 \
+		--backbone $(VISION_BACKBONE) --input-size $(INPUT_SIZE) --input-scale minus1_1 \
 		--weights $(VISION_WEIGHTS) --batch-size $(BATCH_SIZE) \
 		--head-epochs $(HEAD_EPOCHS) --finetune-epochs $(FINETUNE_EPOCHS)
 

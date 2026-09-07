@@ -70,7 +70,13 @@ Mini 的 MD5 应为 `db6ed8330e634445efc8fec83ae81442` 和 `395a35be3651d86dc3b0
 make workstation
 ```
 
-该命令完成数据准备、MobileNetV2 和六特征 Geo Prior 训练、TFLite 导出和基准对比。
+该命令完成数据准备、所选视觉骨干模型训练（默认 MobileNetV2）、六特征 Geo Prior 训练、TFLite 导出和基准对比。
+
+MobileNetV2 是默认骨干模型。通过 `VISION_BACKBONE` 选择任一已评测模型：`efficientnet-b0`、`mobilenet-v3-large`、`mobilenet-v2`、`resnet-50`、`resnet-101`、`convnext-tiny` 或 `convnext-small`。
+
+```bash
+make workstation VISION_BACKBONE=efficientnet-b0
+```
 
 小样本可复现运行：
 
@@ -156,7 +162,7 @@ PYTHONPATH=src python scripts/rpi_camera.py \
 
 ## 论文硬件配置与报告结果
 
-下列数值是报告中的参考测量结果，并非由 `make smoke` 重新生成。它们对应报告中的 EfficientNet-B0 部署；上方默认可复现流程使用的是 MobileNetV2。
+下列数值是报告中的参考测量结果，并非由 `make smoke` 重新生成。报告比较了七种视觉模型；上方默认可复现流程使用的是 MobileNetV2。
 
 ### 树莓派配置
 
@@ -172,21 +178,59 @@ PYTHONPATH=src python scripts/rpi_camera.py \
 
 报告的硬件配置含 GPS。当前相机命令接收固定的 `--latitude` 和 `--longitude`；本仓库尚未实现实时 GPS 读取。
 
-### 验证集准确率
+### iNat2021 验证集准确率
 
-| EfficientNet-B0 版本 | 纯视觉 Top-1 | Geo 融合 Top-1（log-linear，α = 0.3） |
+| 模型 | FP32 Top-1 | FP32 Top-5 | DRQ Top-1 | DRQ Top-5 |
+|---|---:|---:|---:|---:|
+| EfficientNet-B0 | 73.77% | 89.39% | 70.84% | 87.60% |
+| MobileNetV3-Large | 71.63% | 87.70% | 69.64% | 86.75% |
+| MobileNetV2 | 68.62% | 86.25% | 68.31% | 86.14% |
+| ResNet-50 | 75.61% | 90.63% | 75.50% | 90.54% |
+| ResNet-101 | 77.85% | 91.89% | 77.80% | 91.85% |
+| ConvNeXt-Tiny | 81.89% | 94.13% | 81.74% | 94.06% |
+| ConvNeXt-Small | 83.33% | 94.81% | 83.29% | 94.78% |
+
+EfficientNet-B0 使用 log-linear α = 0.3 的 Geo Prior 融合后，FP32 Top-1 从 73.77% 提升至 83.26%，DRQ Top-1 从 70.84% 提升至 81.33%。
+
+### 模型大小与复杂度
+
+| 模型 | FP32 大小 | DRQ 大小 | 参数量 | FLOPs |
+|---|---:|---:|---:|---:|
+| EfficientNet-B0 | 64.07 MB | 16.15 MB | 16.80 M | 0.81 G |
+| MobileNetV3-Large | 47.95 MB | 12.07 MB | 12.57 M | 0.61 G |
+| MobileNetV2 | 57.28 MB | 14.41 MB | 15.02 M | 0.63 G |
+| ResNet-50 | 167.74 MB | 42.04 MB | 43.97 M | 8.20 G |
+| ResNet-101 | 240.09 MB | 60.20 MB | 62.94 M | 15.60 G |
+| ConvNeXt-Tiny | 135.44 MB | 34.05 MB | 35.50 M | 9.00 G |
+| ConvNeXt-Small | 217.94 MB | 54.84 MB | 58.13 M | 17.40 G |
+
+### Pi Zero 2 W 延迟与吞吐
+
+每个单元格均为平均延迟（ms）/ FPS。`—` 表示该格式未在设备上测量。
+
+| 模型 | FP32，1 线程 | FP32，4 线程 | DRQ，1 线程 | DRQ，4 线程 |
+|---|---:|---:|---:|---:|
+| EfficientNet-B0 | 903.95 / 1.11 | 753.08 / 1.33 | 626.26 / 1.60 | 461.50 / 2.17 |
+| MobileNetV3-Large | 224.87 / 4.45 | 116.28 / 8.60 | 239.81 / 4.17 | 205.18 / 4.87 |
+| MobileNetV2 | 221.25 / 4.52 | 114.18 / 8.76 | 311.95 / 3.21 | 182.61 / 5.48 |
+| ResNet-50 | — | — | 1,731.15 / 0.58 | 653.47 / 1.53 |
+| ResNet-101 | — | — | 3,213.36 / 0.31 | 1,192.17 / 0.84 |
+| ConvNeXt-Tiny | — | — | 6,484.90 / 0.15 | 5,243.91 / 0.19 |
+| ConvNeXt-Small | — | — | 11,302.33 / 0.09 | 10,884.12 / 0.09 |
+
+### 能耗与续航
+
+能耗使用 4 个推理线程，设备净功耗为 1.5 W。续航以每 30 秒一次采集-推理-显示周期计算。
+
+| 模型 | FP32：能耗 / FPS/W / 续航 | DRQ：能耗 / FPS/W / 续航 |
 |---|---:|---:|
-| FP32 | 73.77% | 83.26% |
-| DRQ | 70.84% | 81.33% |
-
-### Pi Zero 2 W 部署
-
-| 版本，4 线程 | 模型大小 | 平均延迟 | 吞吐量 | 单次推理能耗 | 每瓦吞吐 | 续航 |
-|---|---:|---:|---:|---:|---:|---:|
-| FP32 | 64.07 MB | 753.08 ms | 1.33 FPS | 1,127.8 mJ | 0.89 FPS/W | 4.68 h |
-| DRQ | 16.15 MB | 461.50 ms | 2.17 FPS | 691.2 mJ | 1.45 FPS/W | 4.55 h |
-
-延迟、吞吐和能耗使用 4 个推理线程，设备净功耗为 1.5 W。续航以每 30 秒一次采集–推理–显示周期计算。
+| EfficientNet-B0 | 1,127.8 mJ / 0.89 / 4.68 h | 691.2 mJ / 1.45 / 4.55 h |
+| MobileNetV3-Large | 174.4 mJ / 5.73 / 4.66 h | 308.0 mJ / 3.25 / 4.62 h |
+| MobileNetV2 | 171.2 mJ / 5.84 / 4.65 h | 273.7 mJ / 3.65 / 4.60 h |
+| ResNet-50 | — | 980.4 mJ / 1.02 / 4.40 h |
+| ResNet-101 | — | 1,785.7 mJ / 0.56 / 4.25 h |
+| ConvNeXt-Tiny | — | 7,894.7 mJ / 0.13 / 3.93 h |
+| ConvNeXt-Small | — | 16,666.7 mJ / 0.06 / 3.70 h |
 
 ## 验证
 

@@ -70,7 +70,13 @@ Run the complete Mini workflow:
 make workstation
 ```
 
-This prepares data, trains MobileNetV2 and the six-feature Geo Prior, exports TFLite models, and creates benchmark tables.
+This prepares data, trains the selected vision backbone (MobileNetV2 by default) and the six-feature Geo Prior, exports TFLite models, and creates benchmark tables.
+
+MobileNetV2 is the default backbone. Select any evaluated architecture with `VISION_BACKBONE`: `efficientnet-b0`, `mobilenet-v3-large`, `mobilenet-v2`, `resnet-50`, `resnet-101`, `convnext-tiny`, or `convnext-small`.
+
+```bash
+make workstation VISION_BACKBONE=efficientnet-b0
+```
 
 Use a small reproducible subset:
 
@@ -156,7 +162,7 @@ Add `--display` for ST7789 output. Add `--geo-model`, `--geo-manifest`, `--latit
 
 ## Reference hardware and reported results
 
-The following values are reported reference measurements, not outputs reproduced by `make smoke`. They use the report's EfficientNet-B0 deployment; the default reproducible workflow above uses MobileNetV2.
+The following values are reported reference measurements, not outputs reproduced by `make smoke`. The report compares seven vision architectures; the default reproducible workflow above uses MobileNetV2.
 
 ### Raspberry Pi configuration
 
@@ -172,21 +178,59 @@ The following values are reported reference measurements, not outputs reproduced
 
 The hardware configuration includes GPS. The current camera command accepts fixed `--latitude` and `--longitude`; live GPS acquisition is not implemented in this repository.
 
-### Validation accuracy
+### iNat2021 validation accuracy
 
-| EfficientNet-B0 variant | Vision Top-1 | Geo-fused Top-1 (log-linear, α = 0.3) |
+| Model | FP32 Top-1 | FP32 Top-5 | DRQ Top-1 | DRQ Top-5 |
+|---|---:|---:|---:|---:|
+| EfficientNet-B0 | 73.77% | 89.39% | 70.84% | 87.60% |
+| MobileNetV3-Large | 71.63% | 87.70% | 69.64% | 86.75% |
+| MobileNetV2 | 68.62% | 86.25% | 68.31% | 86.14% |
+| ResNet-50 | 75.61% | 90.63% | 75.50% | 90.54% |
+| ResNet-101 | 77.85% | 91.89% | 77.80% | 91.85% |
+| ConvNeXt-Tiny | 81.89% | 94.13% | 81.74% | 94.06% |
+| ConvNeXt-Small | 83.33% | 94.81% | 83.29% | 94.78% |
+
+For EfficientNet-B0, Geo Prior fusion with log-linear α = 0.3 raises Top-1 from 73.77% to 83.26% (FP32), and from 70.84% to 81.33% (DRQ).
+
+### Model size and complexity
+
+| Model | FP32 size | DRQ size | Parameters | FLOPs |
+|---|---:|---:|---:|---:|
+| EfficientNet-B0 | 64.07 MB | 16.15 MB | 16.80 M | 0.81 G |
+| MobileNetV3-Large | 47.95 MB | 12.07 MB | 12.57 M | 0.61 G |
+| MobileNetV2 | 57.28 MB | 14.41 MB | 15.02 M | 0.63 G |
+| ResNet-50 | 167.74 MB | 42.04 MB | 43.97 M | 8.20 G |
+| ResNet-101 | 240.09 MB | 60.20 MB | 62.94 M | 15.60 G |
+| ConvNeXt-Tiny | 135.44 MB | 34.05 MB | 35.50 M | 9.00 G |
+| ConvNeXt-Small | 217.94 MB | 54.84 MB | 58.13 M | 17.40 G |
+
+### Pi Zero 2 W latency and throughput
+
+Each entry is mean latency in milliseconds / FPS. `—` means that format was not measured on the device.
+
+| Model | FP32, 1 thread | FP32, 4 threads | DRQ, 1 thread | DRQ, 4 threads |
+|---|---:|---:|---:|---:|
+| EfficientNet-B0 | 903.95 / 1.11 | 753.08 / 1.33 | 626.26 / 1.60 | 461.50 / 2.17 |
+| MobileNetV3-Large | 224.87 / 4.45 | 116.28 / 8.60 | 239.81 / 4.17 | 205.18 / 4.87 |
+| MobileNetV2 | 221.25 / 4.52 | 114.18 / 8.76 | 311.95 / 3.21 | 182.61 / 5.48 |
+| ResNet-50 | — | — | 1,731.15 / 0.58 | 653.47 / 1.53 |
+| ResNet-101 | — | — | 3,213.36 / 0.31 | 1,192.17 / 0.84 |
+| ConvNeXt-Tiny | — | — | 6,484.90 / 0.15 | 5,243.91 / 0.19 |
+| ConvNeXt-Small | — | — | 11,302.33 / 0.09 | 10,884.12 / 0.09 |
+
+### Energy and battery life
+
+Energy measurements use four inference threads and a net device power of 1.5 W. Battery life uses a 30-second capture-infer-display cycle.
+
+| Model | FP32: energy / FPS/W / life | DRQ: energy / FPS/W / life |
 |---|---:|---:|
-| FP32 | 73.77% | 83.26% |
-| DRQ | 70.84% | 81.33% |
-
-### Pi Zero 2 W deployment
-
-| Variant, 4 threads | Model size | Mean latency | Throughput | Energy / inference | Throughput / W | Battery life |
-|---|---:|---:|---:|---:|---:|---:|
-| FP32 | 64.07 MB | 753.08 ms | 1.33 FPS | 1,127.8 mJ | 0.89 FPS/W | 4.68 h |
-| DRQ | 16.15 MB | 461.50 ms | 2.17 FPS | 691.2 mJ | 1.45 FPS/W | 4.55 h |
-
-Latency, throughput, and energy use four inference threads and a net device power of 1.5 W. Battery life uses a 30-second capture–infer–display cycle.
+| EfficientNet-B0 | 1,127.8 mJ / 0.89 / 4.68 h | 691.2 mJ / 1.45 / 4.55 h |
+| MobileNetV3-Large | 174.4 mJ / 5.73 / 4.66 h | 308.0 mJ / 3.25 / 4.62 h |
+| MobileNetV2 | 171.2 mJ / 5.84 / 4.65 h | 273.7 mJ / 3.65 / 4.60 h |
+| ResNet-50 | — | 980.4 mJ / 1.02 / 4.40 h |
+| ResNet-101 | — | 1,785.7 mJ / 0.56 / 4.25 h |
+| ConvNeXt-Tiny | — | 7,894.7 mJ / 0.13 / 3.93 h |
+| ConvNeXt-Small | — | 16,666.7 mJ / 0.06 / 3.70 h |
 
 ## Verification
 
