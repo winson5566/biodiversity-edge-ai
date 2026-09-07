@@ -104,46 +104,64 @@ The official Validation and Public Test archives are optional and are not automa
 
 Real-data runs download ImageNet weights on first use. The presets are runnable starting configurations, not the exact hyperparameters behind every reported result.
 
-### Choose a model
+### Choose a model configuration
+
+Each model has a self-contained JSON configuration with explicit input size, batch size, head/fine-tuning epochs and learning rates, plus Geo Prior training and export settings.
+
+| Model configuration | Input size | Vision batch size |
+|---|---|---|
+| [MobileNetV2](configs/models/mobilenet-v2.json) — default | 224 × 224 | 32 |
+| [MobileNetV3-Large](configs/models/mobilenet-v3-large.json) | 224 × 224 | 32 |
+| [EfficientNet-B0](configs/models/efficientnet-b0.json) | 224 × 224 | 32 |
+| [ResNet50](configs/models/resnet-50.json) | 224 × 224 | 16 |
+| [ResNet101](configs/models/resnet-101.json) | 224 × 224 | 16 |
+| [ConvNeXt-Tiny](configs/models/convnext-tiny.json) | 224 × 224 | 8 |
+| [ConvNeXt-Small](configs/models/convnext-small.json) | 224 × 224 | 8 |
 
 ```bash
-make workstation CONFIG=configs/small_demo.json VISION_BACKBONE=efficientnet-b0
+# EfficientNet-B0 on Train Mini
+make workstation CONFIG=configs/models/efficientnet-b0.json
+
+# The same model settings on full Train
+make workstation CONFIG=configs/models/efficientnet-b0.json DATA_SOURCE=full
 ```
 
-| Backbone option | External input preprocessing |
+Select the configuration file, not a `VISION_BACKBONE` override. All seven profiles default to Train Mini and use the same seed and class selection. They currently start with 3 head epochs at 0.001 and 5 fine-tuning epochs at 0.0001; tune these independently in each file. The smaller batches for larger models are starting choices, not memory guarantees or recovered report settings. Geo Prior has its own `geo_batch_size` (32) and `geo_learning_rate` (0.0005), independent of the vision batch size.
+
+<details>
+<summary>Input preprocessing and running all seven profiles</summary>
+
+| Model | External input preprocessing |
 |---|---|
-| `mobilenet-v2` | RGB scaled to [-1, 1] |
-| `mobilenet-v3-large` | RGB [0, 255]; model includes preprocessing |
-| `efficientnet-b0` | RGB [0, 255]; model includes preprocessing |
-| `resnet-50`, `resnet-101` | RGB → BGR, subtract ImageNet channel means |
-| `convnext-tiny`, `convnext-small` | RGB [0, 255]; model includes preprocessing |
+| MobileNetV2 | RGB scaled to [-1, 1] |
+| MobileNetV3-Large, EfficientNet-B0 | RGB [0, 255]; model includes preprocessing |
+| ResNet50, ResNet101 | RGB → BGR, subtract ImageNet channel means |
+| ConvNeXt-Tiny, ConvNeXt-Small | RGB [0, 255]; model includes preprocessing |
 
 Training, calibration and inference share the same center crop, bilinear resize and pixel scaling. Input contracts follow [Keras Applications](https://keras.io/api/applications/). Training saves the contract beside the Keras model; export inherits and checks it.
 
-<details>
-<summary>Run all seven models on the same small subset</summary>
-
 ```bash
-for model in mobilenet-v2 mobilenet-v3-large efficientnet-b0 \
-             resnet-50 resnet-101 convnext-tiny convnext-small; do
-  make workstation CONFIG=configs/small_demo.json VISION_BACKBONE="$model" || exit 1
+for config in configs/models/*.json; do
+  make workstation CONFIG="$config" || exit 1
 done
 ```
 
-Each model receives its own directory and the same deterministic class selection and split. This runs seven separate training jobs; use a workstation with sufficient memory.
+This runs seven separate experiments on **all usable Train Mini images**, not the small subset. Each model receives its own output directory. Plan for substantial workstation time and disk space.
 
 </details>
 
 ### Configure and resume
 
-JSON presets in `configs/` are read directly by the workflow. Copy a preset and change epochs, input size, batch size, formats, threads or fusion weight. An explicit name gives the experiment a stable location:
+Copy the chosen model profile and edit its settings. For a small real-data trial, set `name` to a unique name, `num_classes: 10`, `min_per_class: 20`, `max_per_class: 50`, and `head_epochs`, `finetune_epochs`, `geo_epochs` to 1, 1, 3. Keep the chosen model's input size and preprocessing. `configs/small_demo.json` and `configs/smoke.json` remain dedicated MobileNetV2 checks; `configs/mini.json` and `configs/full_system.json` are retained as compatibility presets.
+
+Inspect the effective commands before training:
 
 ```bash
 PYTHONPATH=src python -m biodiversity_edge_ai.workflow \
-  --config configs/small_demo.json --run my-experiment --dry-run
+  --config configs/models/resnet-50.json --run my-experiment --dry-run
 ```
 
-Remove `--dry-run` to execute. For external data, add `--annotations /data/train_mini.json --images-root /data`. Paths are relative to the repository working directory, not the JSON file.
+Remove `--dry-run` to execute. Add `--data-source full` (or Make's `DATA_SOURCE=full`) to switch annotation source without changing model or subset settings. Without this option, the JSON's data source is preserved. For external data, add `--annotations /data/train_mini.json --images-root /data`; explicit paths take precedence. Paths are relative to the repository working directory, not the JSON file.
 
 Outputs are isolated under `artifacts/runs/<preset>-<backbone>/`, or `artifacts/runs/<run>/` with `RUN=my-experiment`. The directory records effective settings, source hashes, package versions, step logs, models and results. Repeating the same command reuses verified completed stages. Changed settings, source, environment or saved artifacts require a new run name. After an interrupted data extraction/preparation, use a new run name; source images are not re-downloaded.
 
@@ -343,7 +361,7 @@ src/biodiversity_edge_ai/
 ├── fusion.py         Bayesian and log-linear fusion
 └── pipeline.py       shared prediction pipeline
 
-configs/              Mini, Full, small-subset and smoke presets
+configs/              seven model profiles; data-size and smoke presets
 scripts/              individual command-line entry points
 tests/                unit and optional TensorFlow integration tests
 Makefile              short commands for workflow stages

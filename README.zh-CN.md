@@ -104,46 +104,64 @@ artifacts/runs/small-mobilenet-v2/dataset/
 
 真实数据实验首次运行会下载 ImageNet 权重。这些配置是可运行的起点，并非每项报告结果对应的完整训练超参数。
 
-### 选择模型
+### 选择模型配置
+
+每个模型有独立、完整的 JSON 配置，显式记录输入尺寸、batch size、分类头训练与微调的轮数和学习率，以及 Geo Prior 训练和导出参数。
+
+| 模型配置 | 输入尺寸 | 视觉 batch size |
+|---|---|---|
+| [MobileNetV2](configs/models/mobilenet-v2.json) — 默认 | 224 × 224 | 32 |
+| [MobileNetV3-Large](configs/models/mobilenet-v3-large.json) | 224 × 224 | 32 |
+| [EfficientNet-B0](configs/models/efficientnet-b0.json) | 224 × 224 | 32 |
+| [ResNet50](configs/models/resnet-50.json) | 224 × 224 | 16 |
+| [ResNet101](configs/models/resnet-101.json) | 224 × 224 | 16 |
+| [ConvNeXt-Tiny](configs/models/convnext-tiny.json) | 224 × 224 | 8 |
+| [ConvNeXt-Small](configs/models/convnext-small.json) | 224 × 224 | 8 |
 
 ```bash
-make workstation CONFIG=configs/small_demo.json VISION_BACKBONE=efficientnet-b0
+# EfficientNet-B0：使用 Train Mini
+make workstation CONFIG=configs/models/efficientnet-b0.json
+
+# 同一个模型配置：改用全量 Train
+make workstation CONFIG=configs/models/efficientnet-b0.json DATA_SOURCE=full
 ```
 
-| 骨干模型选项 | 模型外部的输入预处理 |
+通过配置文件选择模型，不再使用 `VISION_BACKBONE` 覆盖模型名。七个配置默认使用 Train Mini，并保持相同的随机种子和类别选择。当前起始设置均为分类头训练 3 轮、学习率 0.001，微调 5 轮、学习率 0.0001，可在各自文件中独立调整。较大模型采用较小 batch，只是起始建议，不是显存保证，也不是从论文恢复的原始参数。Geo Prior 的 `geo_batch_size`（32）和 `geo_learning_rate`（0.0005）独立设置，不随视觉 batch size 改变。
+
+<details>
+<summary>输入预处理与依次运行七个模型配置</summary>
+
+| 模型 | 模型外部的输入预处理 |
 |---|---|
-| `mobilenet-v2` | RGB 缩放至 [-1, 1] |
-| `mobilenet-v3-large` | RGB [0, 255]，模型内部含预处理 |
-| `efficientnet-b0` | RGB [0, 255]，模型内部含预处理 |
-| `resnet-50`、`resnet-101` | RGB → BGR，减去 ImageNet 各通道均值 |
-| `convnext-tiny`、`convnext-small` | RGB [0, 255]，模型内部含预处理 |
+| MobileNetV2 | RGB 缩放至 [-1, 1] |
+| MobileNetV3-Large、EfficientNet-B0 | RGB [0, 255]，模型内部含预处理 |
+| ResNet50、ResNet101 | RGB → BGR，减去 ImageNet 各通道均值 |
+| ConvNeXt-Tiny、ConvNeXt-Small | RGB [0, 255]，模型内部含预处理 |
 
 训练、量化校准和推理共用中心裁剪、双线性缩放和像素归一化。输入约定依据 [Keras Applications](https://keras.io/api/applications/)。训练时在 Keras 模型旁保存输入约定，导出时自动继承并检查。
 
-<details>
-<summary>使用同一小样本依次运行七种模型</summary>
-
 ```bash
-for model in mobilenet-v2 mobilenet-v3-large efficientnet-b0 \
-             resnet-50 resnet-101 convnext-tiny convnext-small; do
-  make workstation CONFIG=configs/small_demo.json VISION_BACKBONE="$model" || exit 1
+for config in configs/models/*.json; do
+  make workstation CONFIG="$config" || exit 1
 done
 ```
 
-每个模型使用独立目录，以及相同的确定性类别选择和数据划分。这会依次执行七次训练，请使用内存充足的工作站。
+这会使用**全部可用 Train Mini 图片**依次执行七次实验，并非小样本测试。每个模型有独立输出目录，请预留足够的工作站运行时间和磁盘空间。
 
 </details>
 
 ### 配置与继续运行
 
-`configs/` 中的 JSON 直接由工作流程读取。复制配置后可调整训练轮数、输入尺寸、批量大小、导出格式、线程数和融合权重。指定实验名可明确输出位置：
+复制所选模型的配置后再调整参数。若要做真实数据小样本试验，将 `name` 改为独立名称，设置 `num_classes: 10`、`min_per_class: 20`、`max_per_class: 50`，并将 `head_epochs`、`finetune_epochs`、`geo_epochs` 设为 1、1、3；保留所选模型的输入尺寸和预处理。`configs/small_demo.json` 和 `configs/smoke.json` 仍是专用的 MobileNetV2 检查配置；`configs/mini.json` 和 `configs/full_system.json` 保留用于兼容已有命令。
+
+训练前可先检查实际执行的命令：
 
 ```bash
 PYTHONPATH=src python -m biodiversity_edge_ai.workflow \
-  --config configs/small_demo.json --run my-experiment --dry-run
+  --config configs/models/resnet-50.json --run my-experiment --dry-run
 ```
 
-移除 `--dry-run` 即执行。外部数据可追加 `--annotations /data/train_mini.json --images-root /data`。相对路径以仓库工作目录为基准，不以 JSON 所在目录为基准。
+移除 `--dry-run` 即执行。追加 `--data-source full`（或 Make 的 `DATA_SOURCE=full`）只切换标注数据源，不改变模型训练或子集参数；未指定时保留 JSON 的数据源。外部数据可追加 `--annotations /data/train_mini.json --images-root /data`，显式路径优先。相对路径以仓库工作目录为基准，不以 JSON 所在目录为基准。
 
 输出隔离在 `artifacts/runs/<配置名>-<骨干模型>/`；使用 `RUN=my-experiment` 时为 `artifacts/runs/<实验名>/`。目录记录实际配置、源码哈希、依赖版本、分步日志、模型和结果。重复相同命令会复用已验证完成的步骤；更改配置、源码、环境或已保存产物时，需要新实验名。数据解压或准备中断后，请使用新实验名；不会重新下载原始图片。
 
@@ -343,7 +361,7 @@ src/biodiversity_edge_ai/
 ├── fusion.py         贝叶斯与 log-linear 融合
 └── pipeline.py       共用预测流程
 
-configs/              Mini、全量、小样本和 smoke 配置
+configs/              七个模型独立配置；数据规模与 smoke 配置
 scripts/              各阶段独立命令行入口
 tests/                单元测试与可选 TensorFlow 集成测试
 Makefile              工作流程的简短命令

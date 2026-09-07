@@ -12,6 +12,7 @@
   "head_epochs": 1,
   "finetune_epochs": 1,
   "geo_epochs": 1,
+  "geo_batch_size": 4,
   "geo_embedding_dim": 16,
   "formats": [
     "fp32",

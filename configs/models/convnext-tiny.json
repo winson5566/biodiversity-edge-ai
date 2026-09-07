@@ -1,0 +1,32 @@
+{
+  "name": "mini",
+  "annotations": "raw/inat2021/train_mini.json",
+  "images_root": "raw/inat2021",
+  "synthetic": false,
+  "num_classes": 10000,
+  "min_per_class": 20,
+  "max_per_class": null,
+  "seed": 42,
+  "backbone": "convnext-tiny",
+  "input_size": 224,
+  "width_multiplier": 1,
+  "weights": "imagenet",
+  "batch_size": 8,
+  "head_epochs": 3,
+  "finetune_epochs": 5,
+  "head_learning_rate": 0.001,
+  "finetune_learning_rate": 0.0001,
+  "geo_epochs": 30,
+  "geo_batch_size": 32,
+  "geo_learning_rate": 0.0005,
+  "geo_embedding_dim": 256,
+  "formats": [
+    "fp32",
+    "drq"
+  ],
+  "representative_limit": 200,
+  "threads": 1,
+  "warmup": 10,
+  "repetitions": 1,
+  "alpha": 0.3
+}

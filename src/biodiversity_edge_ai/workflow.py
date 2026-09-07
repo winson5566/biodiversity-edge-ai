@@ -15,7 +15,6 @@ import sys
 import time
 
 from .config import Experiment
-from .models.catalog import BACKBONES
 
 STAGES = ("prepare", "train", "export", "benchmark")
 
@@ -138,12 +137,15 @@ class Workflow:
             "--width-multiplier", c.width_multiplier, "--weights", c.weights,
             "--batch-size", c.batch_size, "--head-epochs", c.head_epochs,
             "--finetune-epochs", c.finetune_epochs, "--seed", c.seed,
+            "--head-learning-rate", c.head_learning_rate,
+            "--finetune-learning-rate", c.finetune_learning_rate,
         ], [vision, Path(f"{vision}.manifest.json"), Path(f"{vision}.history.json")],
             [manifest, self.class_map, *metadata[:2]])
         self.step("train-geo", "training.geo_prior", [
             "--observations", metadata[0], "--validation-observations", metadata[1],
             "--output", geo, "--num-classes", c.num_classes, "--epochs", c.geo_epochs,
-            "--embedding-dim", c.geo_embedding_dim, "--batch-size", c.batch_size,
+            "--embedding-dim", c.geo_embedding_dim, "--batch-size", c.geo_batch_size,
+            "--learning-rate", c.geo_learning_rate,
             "--seed", c.seed,
         ], [geo, Path(f"{geo}.history.json")], [manifest, *metadata[:2]])
         if stage == "train":
@@ -196,16 +198,17 @@ class Workflow:
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--config", default="configs/mini.json")
+    parser.add_argument("--config", default="configs/models/mobilenet-v2.json")
     parser.add_argument("--run", help="unique experiment name; changed settings require a new name")
-    parser.add_argument("--backbone", choices=tuple(BACKBONES))
+    parser.add_argument("--data-source", choices=("mini", "full"),
+                        help="override the dataset source, preserving model training settings")
     parser.add_argument("--stage", choices=("all", *STAGES), default="all")
     parser.add_argument("--dry-run", action="store_true", help="print commands without writing files")
     parser.add_argument("--annotations")
     parser.add_argument("--images-root")
     args = parser.parse_args()
     try:
-        config = Experiment.load(args.config, backbone=args.backbone,
+        config = Experiment.load(args.config, data_source=args.data_source,
                                  annotations=args.annotations, images_root=args.images_root)
         Workflow(config, args.run, args.dry_run).execute(args.stage)
     except (ValueError, OSError, RuntimeError) as exc:
