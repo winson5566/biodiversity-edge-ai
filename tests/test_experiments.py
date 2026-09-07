@@ -32,7 +32,8 @@ class ExperimentTests(unittest.TestCase):
             with self.subTest(model=path.stem):
                 config = Experiment.load(path)
                 self.assertEqual(config.backbone, path.stem)
-                self.assertEqual(set(json.loads(path.read_text())), set(config.to_dict()))
+                if config.recipe_status != "missing":
+                    self.assertEqual(set(json.loads(path.read_text())), set(config.to_dict()))
                 self.assertEqual(config.annotations, "raw/inat2021/train_mini.json")
                 full = Experiment.load(path, data_source="full")
                 self.assertEqual(full.annotations, "raw/inat2021/train.json")
@@ -71,10 +72,15 @@ class ExperimentTests(unittest.TestCase):
         vision, geo = commands["train-vision"], commands["train-geo"]
         for command, flag, expected in (
             (vision, "--backbone", "convnext-small"),
-            (vision, "--batch-size", "8"),
+            (vision, "--batch-size", "32"),
             (vision, "--head-learning-rate", "0.002"),
             (vision, "--finetune-learning-rate", "0.0002"),
             (geo, "--batch-size", "11"), (geo, "--learning-rate", "0.0006"),
+            (vision, "--resolution-epochs", "3"),
+            (vision, "--resolution-input-size", "300"),
+            (vision, "--optimizer", "sgd"),
+            (vision, "--randaug-layers", "2"),
+            (geo, "--lr-decay", "0.98"), (geo, "--max-per-class", "100"),
         ):
             self.assertEqual(command[command.index(flag) + 1], expected)
 

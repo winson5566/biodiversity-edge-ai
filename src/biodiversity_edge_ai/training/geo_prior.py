@@ -59,18 +59,41 @@ def _random_features(tf: Any, batch_size: Any) -> Any:
     )
 
 
+def balanced_epoch_indices(labels: np.ndarray, cap: int, rng: Any) -> np.ndarray:
+    """Sample classes with weight min(class_count, cap), then cycle each class.
+
+    Equivalent class weights to the capped repeated-category input streams;
+    drawing order is generated with NumPy, not the old TFRecord/JSON loader.
+    """
+    if cap < 1:
+        return rng.permutation(len(labels))
+    classes, counts = np.unique(labels, return_counts=True)
+    weights = np.minimum(counts, cap)
+    chosen = rng.choice(len(classes), size=int(weights.sum()), p=weights / weights.sum())
+    indices = np.empty(len(chosen), dtype=np.int64)
+    label_order = np.argsort(labels, kind="stable")
+    class_ends = np.cumsum(counts)
+    class_starts = class_ends - counts
+    draw_order = np.argsort(chosen, kind="stable")
+    draw_counts = np.bincount(chosen, minlength=len(classes))
+    draw_ends = np.cumsum(draw_counts)
+    draw_starts = draw_ends - draw_counts
+    for class_index, label in enumerate(classes):
+        positions = draw_order[draw_starts[class_index]:draw_ends[class_index]]
+        candidates = label_order[class_starts[class_index]:class_ends[class_index]]
+        samples = []
+        while len(samples) < len(positions):
+            samples.extend(rng.permutation(candidates).tolist())
+        indices[positions] = samples[:len(positions)]
+    return indices
+
+
 def train(args: argparse.Namespace) -> Path:
     tf = _tensorflow()
     tf.keras.utils.set_random_seed(args.seed)
     features, labels = load_observations(args.observations)
     if labels.min() < 0 or labels.max() >= args.num_classes:
         raise ValueError("label_id lies outside configured class range")
-    dataset = (
-        tf.data.Dataset.from_tensor_slices((features, labels))
-        .shuffle(len(labels), seed=args.seed, reshuffle_each_iteration=True)
-        .batch(args.batch_size)
-        .prefetch(tf.data.AUTOTUNE)
-    )
     model = build_geo_prior_model(
         num_classes=args.num_classes,
         embedding_dim=args.embedding_dim,
@@ -79,8 +102,18 @@ def train(args: argparse.Namespace) -> Path:
     optimizer = tf.keras.optimizers.Adam(args.learning_rate)
     epsilon = tf.constant(1e-5, dtype=tf.float32)
     history = []
+    learning_rates = []
+    rng = np.random.default_rng(args.seed)
 
     for epoch in range(args.epochs):
+        rate = args.learning_rate * args.lr_decay ** epoch
+        optimizer.learning_rate.assign(rate)
+        learning_rates.append(rate)
+        indices = balanced_epoch_indices(labels, args.max_per_class, rng)
+        if args.max_per_class > 0 and len(indices) < args.batch_size:
+            raise ValueError("balanced geo epoch is smaller than batch_size; reduce geo_batch_size")
+        dataset = tf.data.Dataset.from_tensor_slices((features[indices], labels[indices])).batch(
+            args.batch_size, drop_remainder=args.max_per_class > 0).prefetch(tf.data.AUTOTUNE)
         losses: list[float] = []
         for batch_features, batch_labels in dataset:
             batch_size = tf.shape(batch_features)[0]
@@ -120,7 +153,8 @@ def train(args: argparse.Namespace) -> Path:
     output.parent.mkdir(parents=True, exist_ok=True)
     model.save(output)
     Path(f"{output}.history.json").write_text(json.dumps({
-        "configuration": vars(args), "loss": history, "validation_top1": val_accuracy,
+        "configuration": vars(args), "loss": history, "learning_rates": learning_rates,
+        "validation_top1": val_accuracy,
     }, indent=2, default=str) + "\n", encoding="utf-8")
     return output
 
@@ -136,6 +170,8 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--batch-size", type=int, default=1024)
     parser.add_argument("--epochs", type=int, default=30)
     parser.add_argument("--learning-rate", type=float, default=5e-4)
+    parser.add_argument("--lr-decay", type=float, default=1.0)
+    parser.add_argument("--max-per-class", type=int, default=-1)
     parser.add_argument("--seed", type=int, default=42)
     return parser
 

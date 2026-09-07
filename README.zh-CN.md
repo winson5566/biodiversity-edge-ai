@@ -19,7 +19,7 @@ python -m pip install -c constraints-workstation.txt -e '.[train,dev]'
 make smoke
 ```
 
-该命令生成 24 张图片，无需下载预训练权重，完成两个模型训练、FP32/DRQ/全 INT8 导出，以及各格式的纯视觉和 Geo 融合评测。结果位于 `artifacts/runs/smoke-mobilenet-v2/results/tradeoffs.md`。合成数据准确率仅用于检查流程执行。
+该命令生成 24 张图片，无需下载预训练权重，完成三阶段视觉训练、Geo Prior 训练、FP32/DRQ/全 INT8 导出，以及各格式的纯视觉和 Geo 融合评测。结果位于 `artifacts/runs/smoke-mobilenet-v2/results/tradeoffs.md`。合成数据准确率仅用于检查流程执行。
 
 `make test` 运行单元测试；`BIODIVERSITY_TF_TESTS=1 make test` 还会检查七种骨干模型，以及训练和设备端预处理的一致性。
 
@@ -102,57 +102,61 @@ artifacts/runs/small-mobilenet-v2/dataset/
 | Mini，默认 | `make workstation` | 10,000 类，使用全部可用 Mini 图片 |
 | 全量 Train | `make workstation DATA_SOURCE=full` | 10,000 类，使用全部可用全量图片 |
 
-真实数据实验首次运行会下载 ImageNet 权重。这些配置是可运行的起点，并非每项报告结果对应的完整训练超参数。
+从头训练的实验首次运行会下载 ImageNet 权重。默认模型为 EfficientNet-B0；保存的 MobileNetV2 配置需要已有检查点。
 
 ### 选择模型配置
 
-每个模型有独立、完整的 JSON 配置，显式记录输入尺寸、batch size、分类头训练与微调的轮数和学习率，以及 Geo Prior 训练和导出参数。
+恢复的配置采用三阶段训练：分类头训练、全模型微调、最后 N 层的高分辨率微调。下表来自保存的训练配置文件，不是统一套用的调参建议。
 
-| 模型配置 | 输入尺寸 | 视觉 batch size |
-|---|---|---|
-| [MobileNetV2](configs/models/mobilenet-v2.json) — 默认 | 224 × 224 | 32 |
-| [MobileNetV3-Large](configs/models/mobilenet-v3-large.json) | 224 × 224 | 32 |
-| [EfficientNet-B0](configs/models/efficientnet-b0.json) | 224 × 224 | 32 |
-| [ResNet50](configs/models/resnet-50.json) | 224 × 224 | 16 |
-| [ResNet101](configs/models/resnet-101.json) | 224 × 224 | 16 |
-| [ConvNeXt-Tiny](configs/models/convnext-tiny.json) | 224 × 224 | 8 |
-| [ConvNeXt-Small](configs/models/convnext-small.json) | 224 × 224 | 8 |
+| 模型配置 | 轮数：分类头 / 全模型 / 高分辨率 | 输入像素 | Batch | 最后 N 层 | RandAugment N / M |
+|---|---|---|---|---|---|
+| [EfficientNet-B0](configs/models/efficientnet-b0.json) — 默认 | 5 / 10 / 5 | 224 → 300 | 32 | 18 | 2 / 2 |
+| [MobileNetV3-Large](configs/models/mobilenet-v3-large.json) | 4 / 10 / 3 | 224 → 300 | 32 | 10 | 3 / 2 |
+| [ResNet50](configs/models/resnet-50.json) | 3 / 10 / 3 | 224 → 300 | 32 | 18 | 2 / 2 |
+| [ResNet101](configs/models/resnet-101.json) | 3 / 10 / 3 | 224 → 300 | 32 | 18 | 2 / 2 |
+| [ConvNeXt-Small](configs/models/convnext-small.json) | 3 / 10 / 3 | 224 → 300 | 32 | 18 | 2 / 2 |
+| [MobileNetV2](configs/models/mobilenet-v2.json) — 仅续训 | 0 / 0 / 2 | 300 | 32 | 18 | 第三阶段不启用 |
+| [ConvNeXt-Tiny](configs/models/convnext-tiny.json) | 未找到配置 | — | — | — | — |
+
+共同参数：SGD、momentum 0.9、label smoothing 0.1、随机种子 42；三阶段学习率为 0.1 / 0.1 / 0.008，按 `batch_size / 256` 缩放，batch 32 时实际为 **0.0125 / 0.0125 / 0.001**。脚本默认启用余弦衰减和 0.3 轮预热，每阶段重新开始。前两阶段使用随机裁剪、翻转和 RandAugment，第三阶段使用评测预处理。
+
+Geo Prior 使用 Adam，batch 1024，初始学习率 0.0005，每轮乘 0.98，训练 30 轮，嵌入维度 256。按训练脚本默认值，各类别采样权重最多计入 100 条观测。视觉与地理模型的 batch 独立设置。
 
 ```bash
-# EfficientNet-B0：使用 Train Mini
 make workstation CONFIG=configs/models/efficientnet-b0.json
-
-# 同一个模型配置：改用全量 Train
 make workstation CONFIG=configs/models/efficientnet-b0.json DATA_SOURCE=full
 ```
 
-通过配置文件选择模型，不再使用 `VISION_BACKBONE` 覆盖模型名。七个配置默认使用 Train Mini，并保持相同的随机种子和类别选择。当前起始设置均为分类头训练 3 轮、学习率 0.001，微调 5 轮、学习率 0.0001，可在各自文件中独立调整。较大模型采用较小 batch，只是起始建议，不是显存保证，也不是从论文恢复的原始参数。Geo Prior 的 `geo_batch_size`（32）和 `geo_learning_rate`（0.0005）独立设置，不随视觉 batch size 改变。
-
-<details>
-<summary>输入预处理与依次运行七个模型配置</summary>
-
-| 模型 | 模型外部的输入预处理 |
-|---|---|
-| MobileNetV2 | RGB 缩放至 [-1, 1] |
-| MobileNetV3-Large、EfficientNet-B0 | RGB [0, 255]，模型内部含预处理 |
-| ResNet50、ResNet101 | RGB → BGR，减去 ImageNet 各通道均值 |
-| ConvNeXt-Tiny、ConvNeXt-Small | RGB [0, 255]，模型内部含预处理 |
-
-训练、量化校准和推理共用中心裁剪、双线性缩放和像素归一化。输入约定依据 [Keras Applications](https://keras.io/api/applications/)。训练时在 Keras 模型旁保存输入约定，导出时自动继承并检查。
+**MobileNetV2 恢复的是续训配置，不是从头训练配置。** 保存的命令会加载已有权重。必须同时提供兼容权重和按输出顺序排列的 JSON 类名列表，类别顺序不一致时会拒绝运行：
 
 ```bash
-for config in configs/models/*.json; do
-  make workstation CONFIG="$config" || exit 1
-done
+make workstation CONFIG=configs/models/mobilenet-v2.json \
+  INITIAL_WEIGHTS=/data/ckp.weights.h5 INITIAL_CLASS_MAP=/data/class_map.json
 ```
 
-这会使用**全部可用 Train Mini 图片**依次执行七次实验，并非小样本测试。每个模型有独立输出目录，请预留足够的工作站运行时间和磁盘空间。
+ConvNeXt-Tiny 的模型架构仍受支持，但未找到对应训练配置。其文件仅记录缺失状态（`recipe_status: "missing"`），不能直接启动训练。补充原始配置，或自行填写完整参数后显式改为 `recipe_status: "custom"`；自行确定的参数不属于已恢复的参数。
+
+<details>
+<summary>参数依据与复现边界</summary>
+
+每份恢复的 JSON 在 `parameter_source` 中记录参考配置与哈希；六份保存的参数文件保留在 [configs/reference](configs/reference)。显式配置值与训练脚本默认值分开记录。
+
+以下调整是明确保留的差异：
+
+- 数据默认仍为 Mini。保存的文件名虽然含有“inatmini”，样本数却写的是 2,686,843（全量 Train）；新流程根据实际准备的数据统计样本，并使用自身的确定性划分。
+- 输入归一化遵循各 Keras 骨干：MobileNetV2 为 [-1, 1]，ResNet 为 BGR／ImageNet 均值处理，EfficientNet、MobileNetV3、ConvNeXt 为 [0, 255]。保存的配置对所有模型均写了 uint8。
+- 第三阶段训练后的 300 像素输入会保留到导出与推理。保存的导出参数写的是 224，本流程不会在训练后悄悄改变尺寸。
+- 显式解冻骨干最后 N 层。保存的构建器仍将父级骨干设为冻结，无法可靠地让这些参数参与训练。
+- 保留 Geo 类别权重和学习率衰减；类别内循环打乱、类别抽样由 NumPy 生成，随机序列不同。
+- 评测、校准和第三阶段训练共用设备端的中心裁剪／双线性缩放；前两阶段使用训练增强。
+
+这些配置恢复的是参数与训练意图，不代表报告结果已被重新复现。RandAugment 保留 [Apache-2.0 许可声明](licenses/RandAugment-LICENSE.txt)。
 
 </details>
 
 ### 配置与继续运行
 
-复制所选模型的配置后再调整参数。若要做真实数据小样本试验，将 `name` 改为独立名称，设置 `num_classes: 10`、`min_per_class: 20`、`max_per_class: 50`，并将 `head_epochs`、`finetune_epochs`、`geo_epochs` 设为 1、1、3；保留所选模型的输入尺寸和预处理。`configs/small_demo.json` 和 `configs/smoke.json` 仍是专用的 MobileNetV2 检查配置；`configs/mini.json` 和 `configs/full_system.json` 保留用于兼容已有命令。
+小样本可使用 `configs/small_demo.json`（简化的 MobileNetV2），或复制一个可从头训练的模型配置，设置 `recipe_status: "custom"`、独立 `name`、`num_classes: 10`、`min_per_class: 20`、`max_per_class: 50`，三个视觉阶段各 1 轮、`geo_epochs: 3`。将 `geo_batch_size` 降为 32，确保小样本能组成完整 batch。`configs/smoke.json` 使用 24 张合成图片、32 → 40 像素检查全部三阶段，它是流程测试，不是恢复出的 MobileNetV2 原始配置。`configs/mini.json` 和 `configs/full_system.json` 保留为 EfficientNet-B0 配置的兼容入口。
 
 训练前可先检查实际执行的命令：
 
@@ -163,7 +167,7 @@ PYTHONPATH=src python -m biodiversity_edge_ai.workflow \
 
 移除 `--dry-run` 即执行。追加 `--data-source full`（或 Make 的 `DATA_SOURCE=full`）只切换标注数据源，不改变模型训练或子集参数；未指定时保留 JSON 的数据源。外部数据可追加 `--annotations /data/train_mini.json --images-root /data`，显式路径优先。相对路径以仓库工作目录为基准，不以 JSON 所在目录为基准。
 
-输出隔离在 `artifacts/runs/<配置名>-<骨干模型>/`；使用 `RUN=my-experiment` 时为 `artifacts/runs/<实验名>/`。目录记录实际配置、源码哈希、依赖版本、分步日志、模型和结果。重复相同命令会复用已验证完成的步骤；更改配置、源码、环境或已保存产物时，需要新实验名。数据解压或准备中断后，请使用新实验名；不会重新下载原始图片。
+输出隔离在 `artifacts/runs/<配置名>-<骨干模型>/`；使用 `RUN=my-experiment` 时为 `artifacts/runs/<实验名>/`。目录记录实际配置、源码哈希、依赖版本、分步日志、模型和结果；分阶段训练记录包括实际学习率、输入尺寸和可训练变量数量。重复相同命令会复用已验证完成的流程步骤；更改配置、源码、环境或已保存产物时，需要新实验名。数据解压或准备中断后，请使用新实验名；不会重新下载原始图片。
 
 ## 量化与导出
 
@@ -361,7 +365,7 @@ src/biodiversity_edge_ai/
 ├── fusion.py         贝叶斯与 log-linear 融合
 └── pipeline.py       共用预测流程
 
-configs/              七个模型独立配置；数据规模与 smoke 配置
+configs/              六份恢复配置、Tiny 缺失状态、参考参数、smoke 配置
 scripts/              各阶段独立命令行入口
 tests/                单元测试与可选 TensorFlow 集成测试
 Makefile              工作流程的简短命令

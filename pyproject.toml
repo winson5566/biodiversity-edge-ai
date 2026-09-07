@@ -26,6 +26,9 @@ biodiversity-benchmark = "biodiversity_edge_ai.evaluation.benchmark:main"
 biodiversity-summarize = "biodiversity_edge_ai.evaluation.summarize:main"
 biodiversity-export = "biodiversity_edge_ai.export.tflite:main"
 
+[tool.setuptools]
+license-files = ["licenses/RandAugment-LICENSE.txt"]
+
 [tool.setuptools.packages.find]
 where = ["src"]
 

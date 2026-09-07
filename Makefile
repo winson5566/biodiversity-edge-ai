@@ -1,7 +1,7 @@
 PYTHON ?= python3
 export PYTHONPATH := src
 .NOTPARALLEL:
-CONFIG ?= configs/models/mobilenet-v2.json
+CONFIG ?= configs/models/efficientnet-b0.json
 DATA_SOURCE ?=
 ifneq ($(DATA_SOURCE),)
 ifeq ($(filter $(DATA_SOURCE),mini full),)
@@ -12,7 +12,9 @@ ifneq ($(VISION_BACKBONE),)
 $(error VISION_BACKBONE has been replaced; use CONFIG=configs/models/$(VISION_BACKBONE).json)
 endif
 RUN ?=
-RUN_ARGS = $(if $(RUN),--run "$(RUN)") $(if $(DATA_SOURCE),--data-source "$(DATA_SOURCE)")
+INITIAL_WEIGHTS ?=
+INITIAL_CLASS_MAP ?=
+RUN_ARGS = $(if $(RUN),--run "$(RUN)") $(if $(DATA_SOURCE),--data-source "$(DATA_SOURCE)") $(if $(INITIAL_WEIGHTS),--initial-weights "$(INITIAL_WEIGHTS)") $(if $(INITIAL_CLASS_MAP),--initial-class-map "$(INITIAL_CLASS_MAP)")
 WORKFLOW = $(PYTHON) -m biodiversity_edge_ai.workflow
 
 .PHONY: help setup prepare train export benchmark workstation smoke test

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+from dataclasses import replace
 import json
 from pathlib import Path
 from typing import Any
@@ -14,6 +15,9 @@ from biodiversity_edge_ai.inference import preprocess_image
 from biodiversity_edge_ai.manifest import ModelManifest, class_map_sha256
 from biodiversity_edge_ai.models.catalog import BACKBONES, input_scale_for
 from biodiversity_edge_ai.models.vision import build_vision_model
+from biodiversity_edge_ai.training.recipe import (
+    configure_trainable_layers, learning_rate_at_step, stages,
+)
 
 
 def _tensorflow() -> Any:
@@ -25,8 +29,10 @@ def _tensorflow() -> Any:
 
 
 def image_dataset(tf: Any, directory: Path, classes: list[str], manifest: ModelManifest,
-                  batch_size: int, seed: int, shuffle: bool) -> Any:
-    """Use the device's PIL crop, resize and scaling during training as well."""
+                  batch_size: int, seed: int, shuffle: bool, *, randaug_layers: int = 0,
+                  randaug_magnitude: int = 0, categorical: bool = False,
+                  drop_remainder: bool = False) -> Any:
+    """Use augmentation for early stages; evaluation shares device preprocessing."""
     paths, labels = [], []
     for label, name in enumerate(classes):
         images = sorted(p for p in (directory / name).glob("*")
@@ -41,15 +47,40 @@ def image_dataset(tf: Any, directory: Path, classes: list[str], manifest: ModelM
             return preprocess_image(image, manifest)
 
     def decode(path: Any, label: Any) -> tuple[Any, Any]:
-        values = tf.numpy_function(read, [path], tf.float32)
+        if randaug_layers:
+            from biodiversity_edge_ai.training.randaugment import distort_image_with_randaugment
+            values = tf.io.decode_image(tf.io.read_file(path), channels=3, expand_animations=False)
+            values.set_shape([None, None, 3])
+            begin, size, _ = tf.image.sample_distorted_bounding_box(
+                tf.shape(values), bounding_boxes=[[[0., 0., 1., 1.]]],
+                min_object_covered=0.5, aspect_ratio_range=(0.75, 1.33),
+                area_range=(0.08, 1.0), max_attempts=100, use_image_if_no_bounding_boxes=True,
+                seed=seed)
+            values = tf.slice(values, begin, size)
+            values = tf.image.resize(tf.cast(values, tf.float32), manifest.input_shape[:2])
+            values = tf.image.random_flip_left_right(values, seed=seed)
+            values = distort_image_with_randaugment(
+                tf.cast(tf.clip_by_value(values, 0, 255), tf.uint8),
+                randaug_layers, randaug_magnitude)
+            values = tf.cast(values, tf.float32)
+            if manifest.input_scale == "minus1_1":
+                values = values / 127.5 - 1.0
+            elif manifest.input_scale == "caffe":
+                values = tf.reverse(values, [-1]) - [103.939, 116.779, 123.68]
+            elif manifest.input_scale != "0_255":
+                raise ValueError(f"unsupported augmentation scale: {manifest.input_scale}")
+        else:
+            values = tf.numpy_function(read, [path], tf.float32)
         values.set_shape(manifest.input_shape)
+        if categorical:
+            label = tf.one_hot(label, len(classes))
         return values, label
 
     dataset = tf.data.Dataset.from_tensor_slices((paths, labels))
     if shuffle:
         dataset = dataset.shuffle(len(paths), seed=seed)
     return dataset.map(decode, num_parallel_calls=tf.data.AUTOTUNE).batch(
-        batch_size).prefetch(tf.data.AUTOTUNE)
+        batch_size, drop_remainder=drop_remainder).prefetch(tf.data.AUTOTUNE)
 
 
 def load_prepared_classes(data_dir: str | Path) -> tuple[list[str] | None, list[str] | None]:
@@ -89,41 +120,89 @@ def train(args: argparse.Namespace) -> Path:
         input_shape=[args.input_size, args.input_size, 3], input_dtype="float32",
         input_scale=args.input_scale,
     )
-    train_ds = image_dataset(tf, images_dir / "train", directory_names, manifest,
-                             args.batch_size, args.seed, True)
-    val_ds = image_dataset(tf, images_dir / "val", directory_names, manifest,
-                           args.batch_size, args.seed, False)
-
-    model = build_vision_model(
-        backbone=args.backbone,
-        num_classes=len(directory_names),
-        input_size=args.input_size,
-        alpha=args.width_multiplier,
-        weights=None if args.weights == "none" else args.weights,
-        trainable=False,
-    )
-    model.compile(
-        optimizer=tf.keras.optimizers.Adam(args.head_learning_rate),
-        loss=tf.keras.losses.SparseCategoricalCrossentropy(),
-        metrics=["accuracy"],
-    )
-    head = model.fit(train_ds, validation_data=val_ds, epochs=args.head_epochs)
-
-    base = model.layers[1]
-    base.trainable = True
-    model.compile(
-        optimizer=tf.keras.optimizers.Adam(args.finetune_learning_rate),
-        loss=tf.keras.losses.SparseCategoricalCrossentropy(),
-        metrics=["accuracy"],
-    )
-    fine = model.fit(train_ds, validation_data=val_ds, epochs=args.finetune_epochs)
-
+    if args.initial_weights:
+        if not args.initial_class_map:
+            raise ValueError("initial weights require --initial-class-map")
+        initial_names = json.loads(Path(args.initial_class_map).read_text())
+        if initial_names != class_names:
+            raise ValueError("initial class map differs from prepared dataset label order")
+    plan = stages(args)
+    if not plan:
+        raise ValueError("at least one training stage is required")
     output = Path(args.output)
     output.parent.mkdir(parents=True, exist_ok=True)
+    previous_weights = None
+    histories, stage_records = {}, []
+    model = None
+    for stage in plan:
+        size = stage["input_size"]
+        manifest = replace(manifest, input_shape=[size, size, 3])
+        if model is None or int(model.input_shape[1]) != size:
+            if model is not None:
+                previous_weights = model.get_weights()
+            model = build_vision_model(
+                backbone=args.backbone, num_classes=len(directory_names), input_size=size,
+                alpha=args.width_multiplier,
+                weights=(None if previous_weights is not None or args.initial_weights
+                         or args.weights == "none" else args.weights),
+                trainable=False,
+            )
+            if previous_weights is not None:
+                model.set_weights(previous_weights)
+            elif args.initial_weights:
+                model.load_weights(args.initial_weights)
+        configure_trainable_layers(model, stage["unfreeze"])
+        train_ds = image_dataset(
+            tf, images_dir / "train", directory_names, manifest, args.batch_size, args.seed, True,
+            randaug_layers=args.randaug_layers if stage["augment"] else 0,
+            randaug_magnitude=args.randaug_magnitude, categorical=True,
+            drop_remainder=args.optimizer == "sgd",
+        )
+        val_ds = image_dataset(tf, images_dir / "val", directory_names, manifest,
+                               args.batch_size, args.seed, False, categorical=True)
+        batches = int(tf.data.experimental.cardinality(train_ds))
+        if batches < 1:
+            raise ValueError("training split is smaller than batch_size; reduce batch_size")
+        rate = stage["learning_rate"] * (args.batch_size / 256 if args.scale_learning_rate else 1)
+        optimizer = (tf.keras.optimizers.SGD(rate, momentum=args.momentum)
+                     if args.optimizer == "sgd" else tf.keras.optimizers.Adam(rate))
+        model.compile(optimizer=optimizer,
+                      loss=tf.keras.losses.CategoricalCrossentropy(label_smoothing=args.label_smoothing),
+                      metrics=["accuracy"])
+        rates = []
+
+        class BatchSchedule(tf.keras.callbacks.Callback):
+            def __init__(self):
+                super().__init__()
+                self.step = 0
+
+            def on_train_batch_begin(self, batch, logs=None):
+                self.step += 1
+                value = learning_rate_at_step(
+                    rate, self.step, stage["epochs"] * batches,
+                    int(args.lr_warmup_epochs * batches), args.cosine_decay)
+                self.model.optimizer.learning_rate.assign(value)
+                rates.append(value)
+
+        callbacks = [BatchSchedule()]
+        checkpoint = output.parent / f"{output.stem}_{stage['name']}.weights.h5"
+        callbacks.append(tf.keras.callbacks.ModelCheckpoint(
+            checkpoint, save_weights_only=True, save_freq="epoch"))
+        print(f"stage={stage['name']} epochs={stage['epochs']} size={size} "
+              f"optimizer={args.optimizer} scaled_learning_rate={rate}", flush=True)
+        history = model.fit(train_ds, validation_data=val_ds, epochs=stage["epochs"],
+                            callbacks=callbacks)
+        histories[stage["name"]] = history.history
+        stage_records.append({
+            **stage, "effective_initial_learning_rate": rate, "steps_per_epoch": batches,
+            "trainable_variables": len(model.trainable_variables),
+            "first_learning_rate": rates[0], "last_learning_rate": rates[-1],
+        })
+
     model.save(output)
     manifest.save(f"{output}.manifest.json")
     Path(f"{output}.history.json").write_text(json.dumps({
-        "configuration": vars(args), "head": head.history, "finetune": fine.history,
+        "configuration": vars(args), **histories, "stages": stage_records,
     }, indent=2, default=str) + "\n", encoding="utf-8")
     class_map.parent.mkdir(parents=True, exist_ok=True)
     class_map.write_text(json.dumps(class_names, ensure_ascii=False, indent=2) + "\n")
@@ -145,6 +224,20 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--finetune-epochs", type=int, default=5)
     parser.add_argument("--head-learning-rate", type=float, default=1e-3)
     parser.add_argument("--finetune-learning-rate", type=float, default=1e-4)
+    parser.add_argument("--resolution-epochs", type=int, default=0)
+    parser.add_argument("--resolution-learning-rate", type=float, default=0.008)
+    parser.add_argument("--resolution-input-size", type=int, default=300)
+    parser.add_argument("--unfreeze-layers", type=int, default=18)
+    parser.add_argument("--optimizer", choices=("adam", "sgd"), default="adam")
+    parser.add_argument("--momentum", type=float, default=0.0)
+    parser.add_argument("--scale-learning-rate", action="store_true")
+    parser.add_argument("--cosine-decay", action="store_true")
+    parser.add_argument("--lr-warmup-epochs", type=float, default=0.0)
+    parser.add_argument("--label-smoothing", type=float, default=0.0)
+    parser.add_argument("--randaug-layers", type=int, default=0)
+    parser.add_argument("--randaug-magnitude", type=int, default=0)
+    parser.add_argument("--initial-weights")
+    parser.add_argument("--initial-class-map")
     parser.add_argument("--seed", type=int, default=42)
     return parser
 

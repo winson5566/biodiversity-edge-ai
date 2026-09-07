@@ -19,7 +19,7 @@ python -m pip install -c constraints-workstation.txt -e '.[train,dev]'
 make smoke
 ```
 
-This generates 24 images, trains both models without pretrained downloads, exports FP32/DRQ/full INT8, and evaluates each format with and without Geo fusion. Inspect `artifacts/runs/smoke-mobilenet-v2/results/tradeoffs.md`. Synthetic accuracy only checks pipeline execution.
+This generates 24 images, runs three-stage vision training and Geo Prior training without pretrained downloads, exports FP32/DRQ/full INT8, and evaluates each format with and without Geo fusion. Inspect `artifacts/runs/smoke-mobilenet-v2/results/tradeoffs.md`. Synthetic accuracy only checks pipeline execution.
 
 `make test` runs the unit tests. `BIODIVERSITY_TF_TESTS=1 make test` also checks all seven backbones and matching training/device preprocessing.
 
@@ -102,59 +102,63 @@ The official Validation and Public Test archives are optional and are not automa
 | Mini, default | `make workstation` | 10,000 classes, all usable Mini images |
 | Full Train | `make workstation DATA_SOURCE=full` | 10,000 classes, all usable Full images |
 
-Real-data runs download ImageNet weights on first use. The presets are runnable starting configurations, not the exact hyperparameters behind every reported result.
+From-scratch runs download ImageNet weights on first use. The default model is EfficientNet-B0; the saved MobileNetV2 recipe requires an existing checkpoint.
 
 ### Choose a model configuration
 
-Each model has a self-contained JSON configuration with explicit input size, batch size, head/fine-tuning epochs and learning rates, plus Geo Prior training and export settings.
+The recovered profiles use three stages: classifier head, full fine-tuning, then higher-resolution fine-tuning of the last N backbone layers. The model-specific settings below come from saved training configuration files, not generic tuning suggestions.
 
-| Model configuration | Input size | Vision batch size |
-|---|---|---|
-| [MobileNetV2](configs/models/mobilenet-v2.json) — default | 224 × 224 | 32 |
-| [MobileNetV3-Large](configs/models/mobilenet-v3-large.json) | 224 × 224 | 32 |
-| [EfficientNet-B0](configs/models/efficientnet-b0.json) | 224 × 224 | 32 |
-| [ResNet50](configs/models/resnet-50.json) | 224 × 224 | 16 |
-| [ResNet101](configs/models/resnet-101.json) | 224 × 224 | 16 |
-| [ConvNeXt-Tiny](configs/models/convnext-tiny.json) | 224 × 224 | 8 |
-| [ConvNeXt-Small](configs/models/convnext-small.json) | 224 × 224 | 8 |
+| Model configuration | Epochs: head / full / resolution | Input pixels | Batch | Last N layers | RandAugment N / M |
+|---|---|---|---|---|---|
+| [EfficientNet-B0](configs/models/efficientnet-b0.json) — default | 5 / 10 / 5 | 224 → 300 | 32 | 18 | 2 / 2 |
+| [MobileNetV3-Large](configs/models/mobilenet-v3-large.json) | 4 / 10 / 3 | 224 → 300 | 32 | 10 | 3 / 2 |
+| [ResNet50](configs/models/resnet-50.json) | 3 / 10 / 3 | 224 → 300 | 32 | 18 | 2 / 2 |
+| [ResNet101](configs/models/resnet-101.json) | 3 / 10 / 3 | 224 → 300 | 32 | 18 | 2 / 2 |
+| [ConvNeXt-Small](configs/models/convnext-small.json) | 3 / 10 / 3 | 224 → 300 | 32 | 18 | 2 / 2 |
+| [MobileNetV2](configs/models/mobilenet-v2.json) — continuation only | 0 / 0 / 2 | 300 | 32 | 18 | Disabled in stage 3 |
+| [ConvNeXt-Tiny](configs/models/convnext-tiny.json) | Not recovered | — | — | — | — |
+
+Common recovered settings: SGD, momentum 0.9, label smoothing 0.1, seed 42; stage learning rates 0.1 / 0.1 / 0.008, scaled by `batch_size / 256` to **0.0125 / 0.0125 / 0.001** at batch 32. Script defaults enable cosine decay and 0.3 warmup epochs, restarted per stage. Random crop, flip and RandAugment apply to stages 1–2; stage 3 uses evaluation preprocessing.
+
+Geo Prior uses Adam, batch 1024, learning rate 0.0005 with 0.98 epoch-wise decay, 30 epochs and embedding dimension 256. Category sampling weights are capped at 100 observations per class, as configured by the training-script defaults. Vision and Geo batches are independent.
 
 ```bash
-# EfficientNet-B0 on Train Mini
 make workstation CONFIG=configs/models/efficientnet-b0.json
-
-# The same model settings on full Train
 make workstation CONFIG=configs/models/efficientnet-b0.json DATA_SOURCE=full
 ```
 
-Select the configuration file, not a `VISION_BACKBONE` override. All seven profiles default to Train Mini and use the same seed and class selection. They currently start with 3 head epochs at 0.001 and 5 fine-tuning epochs at 0.0001; tune these independently in each file. The smaller batches for larger models are starting choices, not memory guarantees or recovered report settings. Geo Prior has its own `geo_batch_size` (32) and `geo_learning_rate` (0.0005), independent of the vision batch size.
-
-<details>
-<summary>Input preprocessing and running all seven profiles</summary>
-
-| Model | External input preprocessing |
-|---|---|
-| MobileNetV2 | RGB scaled to [-1, 1] |
-| MobileNetV3-Large, EfficientNet-B0 | RGB [0, 255]; model includes preprocessing |
-| ResNet50, ResNet101 | RGB → BGR, subtract ImageNet channel means |
-| ConvNeXt-Tiny, ConvNeXt-Small | RGB [0, 255]; model includes preprocessing |
-
-Training, calibration and inference share the same center crop, bilinear resize and pixel scaling. Input contracts follow [Keras Applications](https://keras.io/api/applications/). Training saves the contract beside the Keras model; export inherits and checks it.
+**MobileNetV2 is a continuation recipe, not a recovered from-scratch recipe.** Its saved command loads existing weights. Supply both compatible weights and their ordered JSON class-name list; mismatched class order is rejected:
 
 ```bash
-for config in configs/models/*.json; do
-  make workstation CONFIG="$config" || exit 1
-done
+make workstation CONFIG=configs/models/mobilenet-v2.json \
+  INITIAL_WEIGHTS=/data/ckp.weights.h5 INITIAL_CLASS_MAP=/data/class_map.json
 ```
 
-This runs seven separate experiments on **all usable Train Mini images**, not the small subset. Each model receives its own output directory. Plan for substantial workstation time and disk space.
+ConvNeXt-Tiny remains a supported architecture, but no training recipe was found. Its file only records the missing status (`recipe_status: "missing"`) and cannot start training. Supply the missing configuration, or explicitly use `recipe_status: "custom"` after defining your own complete settings; these would not be recovered parameters.
+
+<details>
+<summary>Parameter evidence and reproduction limits</summary>
+
+Each recovered JSON records its reference configuration and hashes in `parameter_source`; the six saved flag files are preserved in [configs/reference](configs/reference). Values inherited from script defaults are distinguished from explicit flag-file values.
+
+Several adaptations are deliberate:
+
+- Mini remains the default dataset. Although the saved filenames contain “inatmini”, their sample count is 2,686,843 (Full Train); the new workflow derives counts from the actual prepared dataset and uses its own deterministic splits.
+- Input scaling follows each Keras backbone: MobileNetV2 uses [-1, 1], ResNets use BGR/ImageNet mean subtraction, and EfficientNet/MobileNetV3/ConvNeXt use [0, 255]. Saved flags specified uint8 scaling for every model.
+- Stage 3 retains its trained 300-pixel input for export and inference. Saved export flags requested 224 pixels; this workflow does not silently change resolution after training.
+- The last N backbone layers are explicitly unfrozen. The saved builder left the parent backbone frozen, so its setting did not reliably enable those variables.
+- Geo category weights and decay are retained; sampling uses shuffled per-class cycles with NumPy-generated class draws, so the random sequence differs.
+- Evaluation, calibration and stage-3 training share the device's center-crop/bilinear preprocessing. Earlier stages use training augmentation.
+
+These profiles recover settings and intent; they do not establish that the reported results have been reproduced. RandAugment retains its [Apache-2.0 notices](licenses/RandAugment-LICENSE.txt).
 
 </details>
 
 ### Configure and resume
 
-Copy the chosen model profile and edit its settings. For a small real-data trial, set `name` to a unique name, `num_classes: 10`, `min_per_class: 20`, `max_per_class: 50`, and `head_epochs`, `finetune_epochs`, `geo_epochs` to 1, 1, 3. Keep the chosen model's input size and preprocessing. `configs/small_demo.json` and `configs/smoke.json` remain dedicated MobileNetV2 checks; `configs/mini.json` and `configs/full_system.json` are retained as compatibility presets.
+For a small trial, use `configs/small_demo.json` (simplified MobileNetV2), or copy a from-scratch model profile and set `recipe_status: "custom"`, a unique `name`, `num_classes: 10`, `min_per_class: 20`, `max_per_class: 50`, all three vision epoch counts to 1, and `geo_epochs: 3`. Reduce `geo_batch_size` to 32 so the small subset contains a complete batch. `configs/smoke.json` exercises all three stages on 24 synthetic images at 32 → 40 pixels; it is a pipeline test, not a recovered MobileNetV2 recipe. `configs/mini.json` and `configs/full_system.json` mirror the EfficientNet-B0 profile for compatibility.
 
-Inspect the effective commands before training:
+Inspect commands without running training:
 
 ```bash
 PYTHONPATH=src python -m biodiversity_edge_ai.workflow \
@@ -163,7 +167,7 @@ PYTHONPATH=src python -m biodiversity_edge_ai.workflow \
 
 Remove `--dry-run` to execute. Add `--data-source full` (or Make's `DATA_SOURCE=full`) to switch annotation source without changing model or subset settings. Without this option, the JSON's data source is preserved. For external data, add `--annotations /data/train_mini.json --images-root /data`; explicit paths take precedence. Paths are relative to the repository working directory, not the JSON file.
 
-Outputs are isolated under `artifacts/runs/<preset>-<backbone>/`, or `artifacts/runs/<run>/` with `RUN=my-experiment`. The directory records effective settings, source hashes, package versions, step logs, models and results. Repeating the same command reuses verified completed stages. Changed settings, source, environment or saved artifacts require a new run name. After an interrupted data extraction/preparation, use a new run name; source images are not re-downloaded.
+Outputs are isolated under `artifacts/runs/<preset>-<backbone>/`, or `artifacts/runs/<run>/` with `RUN=my-experiment`. The directory records effective settings, source hashes, package versions, step logs, models and results. Stage histories include actual learning rates, input sizes and trainable-variable counts. Repeating the same command reuses verified completed workflow steps. Changed settings, source, environment or saved artifacts require a new run name. After an interrupted data extraction/preparation, use a new run name; source images are not re-downloaded.
 
 ## Quantization and export
 
@@ -361,7 +365,7 @@ src/biodiversity_edge_ai/
 ├── fusion.py         Bayesian and log-linear fusion
 └── pipeline.py       shared prediction pipeline
 
-configs/              seven model profiles; data-size and smoke presets
+configs/              six recovered profiles, Tiny status, reference flags, smoke presets
 scripts/              individual command-line entry points
 tests/                unit and optional TensorFlow integration tests
 Makefile              short commands for workflow stages

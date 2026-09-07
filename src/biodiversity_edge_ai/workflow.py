@@ -105,8 +105,21 @@ class Workflow:
         print(f"[done] {name}", flush=True)
 
     def execute(self, stage: str = "all") -> None:
-        self.initialize()
         c = self.config
+        if stage != "prepare" and not self.dry_run:
+            if c.recipe_status == "missing":
+                raise ValueError("training recipe is missing; supply verified settings or explicitly "
+                                 "mark an independently chosen recipe as custom")
+            if c.requires_initial_weights and not c.initial_weights:
+                raise ValueError("this is a continuation-only recipe; supply --initial-weights "
+                                 "and --initial-class-map from the original training run")
+            if c.initial_weights:
+                if not c.initial_class_map:
+                    raise ValueError("initial weights require --initial-class-map to check label order")
+                for path in (c.initial_weights, c.initial_class_map):
+                    if not Path(path).is_file():
+                        raise ValueError(f"initial training artifact not found: {path}")
+        self.initialize()
         annotations, images_root = Path(c.annotations), Path(c.images_root)
         if c.synthetic:
             images_root = self.root / "source"
@@ -131,6 +144,21 @@ class Workflow:
                 raise ValueError("Geo Prior needs valid latitude, longitude and date in train and val; "
                                  "inspect dataset metadata before training")
         vision, geo = self.models / "vision.keras", self.models / "geo_prior.keras"
+        extra = ["--resolution-epochs", c.resolution_epochs,
+                 "--resolution-learning-rate", c.resolution_learning_rate,
+                 "--resolution-input-size", c.resolution_input_size,
+                 "--unfreeze-layers", c.unfreeze_layers, "--optimizer", c.optimizer,
+                 "--momentum", c.momentum, "--lr-warmup-epochs", c.lr_warmup_epochs,
+                 "--label-smoothing", c.label_smoothing,
+                 "--randaug-layers", c.randaug_layers, "--randaug-magnitude", c.randaug_magnitude]
+        if c.scale_learning_rate:
+            extra.append("--scale-learning-rate")
+        if c.cosine_decay:
+            extra.append("--cosine-decay")
+        if c.initial_weights:
+            extra += ["--initial-weights", c.initial_weights,
+                      "--initial-class-map", c.initial_class_map]
+        initial_inputs = [Path(p) for p in (c.initial_weights, c.initial_class_map) if p]
         self.step("train-vision", "training.vision", [
             "--data-dir", self.data, "--output", vision, "--class-map", self.class_map,
             "--backbone", c.backbone, "--input-size", c.input_size,
@@ -139,13 +167,16 @@ class Workflow:
             "--finetune-epochs", c.finetune_epochs, "--seed", c.seed,
             "--head-learning-rate", c.head_learning_rate,
             "--finetune-learning-rate", c.finetune_learning_rate,
+            *extra,
         ], [vision, Path(f"{vision}.manifest.json"), Path(f"{vision}.history.json")],
-            [manifest, self.class_map, *metadata[:2]])
+            [manifest, self.class_map, *metadata[:2], *initial_inputs])
         self.step("train-geo", "training.geo_prior", [
             "--observations", metadata[0], "--validation-observations", metadata[1],
             "--output", geo, "--num-classes", c.num_classes, "--epochs", c.geo_epochs,
             "--embedding-dim", c.geo_embedding_dim, "--batch-size", c.geo_batch_size,
             "--learning-rate", c.geo_learning_rate,
+            "--lr-decay", c.geo_lr_decay,
+            "--max-per-class", c.geo_max_per_class or -1,
             "--seed", c.seed,
         ], [geo, Path(f"{geo}.history.json")], [manifest, *metadata[:2]])
         if stage == "train":
@@ -198,7 +229,7 @@ class Workflow:
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--config", default="configs/models/mobilenet-v2.json")
+    parser.add_argument("--config", default="configs/models/efficientnet-b0.json")
     parser.add_argument("--run", help="unique experiment name; changed settings require a new name")
     parser.add_argument("--data-source", choices=("mini", "full"),
                         help="override the dataset source, preserving model training settings")
@@ -206,9 +237,13 @@ def main() -> None:
     parser.add_argument("--dry-run", action="store_true", help="print commands without writing files")
     parser.add_argument("--annotations")
     parser.add_argument("--images-root")
+    parser.add_argument("--initial-weights")
+    parser.add_argument("--initial-class-map")
     args = parser.parse_args()
     try:
         config = Experiment.load(args.config, data_source=args.data_source,
+                                 initial_weights=args.initial_weights,
+                                 initial_class_map=args.initial_class_map,
                                  annotations=args.annotations, images_root=args.images_root)
         Workflow(config, args.run, args.dry_run).execute(args.stage)
     except (ValueError, OSError, RuntimeError) as exc:

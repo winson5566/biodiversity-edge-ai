@@ -1,6 +1,6 @@
 """Validated experiment settings; paths are relative to the working directory."""
 
-from dataclasses import asdict, dataclass, fields
+from dataclasses import asdict, dataclass, field, fields
 import json
 import math
 from pathlib import Path
@@ -27,9 +27,28 @@ class Experiment:
     finetune_epochs: int = 5
     head_learning_rate: float = 1e-3
     finetune_learning_rate: float = 1e-4
+    resolution_epochs: int = 0
+    resolution_learning_rate: float = 0.008
+    resolution_input_size: int = 300
+    unfreeze_layers: int = 18
+    optimizer: str = "adam"
+    momentum: float = 0.0
+    scale_learning_rate: bool = False
+    cosine_decay: bool = False
+    lr_warmup_epochs: float = 0.0
+    label_smoothing: float = 0.0
+    randaug_layers: int = 0
+    randaug_magnitude: int = 0
+    initial_weights: str | None = None
+    initial_class_map: str | None = None
+    requires_initial_weights: bool = False
+    recipe_status: str = "demo"
+    parameter_source: dict = field(default_factory=dict)
     geo_epochs: int = 30
     geo_batch_size: int = 32
     geo_learning_rate: float = 5e-4
+    geo_lr_decay: float = 1.0
+    geo_max_per_class: int | None = None
     geo_embedding_dim: int = 256
     formats: tuple[str, ...] = ("fp32", "drq")
     representative_limit: int = 200
@@ -80,16 +99,39 @@ class Experiment:
             type(self.max_per_class) is not int or self.max_per_class < 3
         ):
             raise ValueError("max_per_class must be null or an integer >=3")
-        for key in ("head_epochs", "finetune_epochs", "warmup", "seed"):
+        for key in ("head_epochs", "finetune_epochs", "resolution_epochs", "unfreeze_layers",
+                    "randaug_layers", "randaug_magnitude", "warmup", "seed"):
             if type(getattr(self, key)) is not int or getattr(self, key) < 0:
                 raise ValueError(f"{key} must be a nonnegative integer")
-        if self.head_epochs + self.finetune_epochs < 1:
+        if self.head_epochs + self.finetune_epochs + self.resolution_epochs < 1:
             raise ValueError("at least one vision training epoch is required")
-        for key in ("head_learning_rate", "finetune_learning_rate", "geo_learning_rate"):
+        for key in ("head_learning_rate", "finetune_learning_rate", "resolution_learning_rate",
+                    "geo_learning_rate", "geo_lr_decay"):
             value = getattr(self, key)
             if (isinstance(value, bool) or not isinstance(value, (int, float))
                     or not math.isfinite(value) or value <= 0):
                 raise ValueError(f"{key} must be a finite positive number")
+        if self.optimizer not in ("adam", "sgd"):
+            raise ValueError("optimizer must be adam or sgd")
+        if type(self.resolution_input_size) is not int or self.resolution_input_size < 32:
+            raise ValueError("resolution_input_size must be an integer >=32")
+        if not 0 <= self.momentum < 1 or not 0 <= self.label_smoothing < 1:
+            raise ValueError("momentum and label_smoothing must be in [0,1)")
+        if not math.isfinite(self.lr_warmup_epochs) or self.lr_warmup_epochs < 0:
+            raise ValueError("lr_warmup_epochs must be finite and nonnegative")
+        if self.randaug_magnitude > 10:
+            raise ValueError("randaug_magnitude must be in [0,10]")
+        if self.geo_lr_decay > 1:
+            raise ValueError("geo_lr_decay must be <=1")
+        if self.geo_max_per_class is not None and (
+            type(self.geo_max_per_class) is not int or self.geo_max_per_class < 1
+        ):
+            raise ValueError("geo_max_per_class must be null or a positive integer")
+        if self.recipe_status not in ("recovered", "missing", "demo", "custom"):
+            raise ValueError("recipe_status must be recovered, missing, demo or custom")
+        for key in ("scale_learning_rate", "cosine_decay", "requires_initial_weights"):
+            if type(getattr(self, key)) is not bool:
+                raise ValueError(f"{key} must be boolean")
         if not 0 <= self.alpha <= 1 or self.width_multiplier <= 0:
             raise ValueError("alpha must be in [0,1] and width_multiplier positive")
         if not self.formats or len(set(self.formats)) != len(self.formats) or (
