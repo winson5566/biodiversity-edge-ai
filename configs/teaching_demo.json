@@ -1,0 +1,30 @@
+{
+  "scope": "embedded ML teaching extension",
+  "dataset": {
+    "classes": 10,
+    "input_size": 128,
+    "split": "fixed train/val/test",
+    "class_map": "data/class_maps/teaching_classes.json"
+  },
+  "vision": {
+    "backbone": "mobilenet-v2",
+    "width_multiplier": 0.5,
+    "input_scale": "minus1_1"
+  },
+  "geo_prior": {
+    "input_features": 6,
+    "embedding_dim": 256,
+    "fusion_mode": "log_linear",
+    "alpha_selection": "validation_only"
+  },
+  "optimizations": [
+    "fp32",
+    "drq",
+    "full_int8",
+    "pruning_30",
+    "pruning_50",
+    "pruning_70",
+    "pruning_50_plus_int8"
+  ],
+  "note": "Pruning is a new teaching extension and was not evaluated in the original project."
+}

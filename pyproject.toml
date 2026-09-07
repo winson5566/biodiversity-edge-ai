@@ -1,0 +1,33 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "biodiversity-edge-ai"
+version = "0.1.0"
+description = "Integrated vision, geo-prior, optimization, and Raspberry Pi biodiversity recognition"
+readme = "README.md"
+requires-python = ">=3.10,<3.13"
+dependencies = [
+  "numpy>=1.26,<2",
+  "Pillow>=10",
+]
+
+[project.optional-dependencies]
+train = ["tensorflow>=2.16.2,<2.20"]
+rpi = ["psutil>=5.9"]
+dev = ["pytest>=8"]
+
+[project.scripts]
+biodiversity-prepare-data = "biodiversity_edge_ai.data.prepare:main"
+biodiversity-predict = "biodiversity_edge_ai.device.predict:main"
+biodiversity-benchmark = "biodiversity_edge_ai.evaluation.benchmark:main"
+biodiversity-summarize = "biodiversity_edge_ai.evaluation.summarize:main"
+biodiversity-export = "biodiversity_edge_ai.export.tflite:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+pythonpath = ["src"]
+testpaths = ["tests"]

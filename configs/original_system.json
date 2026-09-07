@@ -1,0 +1,18 @@
+{
+  "scope": "original reported system",
+  "dataset": {
+    "name": "iNaturalist 2021",
+    "classes": 10000,
+    "training_images": 2686843,
+    "validation_images": 50000,
+    "test_images": 50000
+  },
+  "deployment": {
+    "device": "Raspberry Pi Zero 2 W",
+    "vision_model": "EfficientNet-B0",
+    "vision_formats": ["fp32", "drq"],
+    "geo_prior": true,
+    "fusion_modes": ["bayes", "log_linear"]
+  },
+  "not_part_of_original_work": ["pruning", "full-integer INT8 activation quantization"]
+}
